@@ -2,9 +2,10 @@ use axum::{
     body::Body,
     http::{Request, Response, StatusCode},
 };
-use futures::future::BoxFuture;
 use std::path::{Path, PathBuf};
 use tower_http::auth::AsyncAuthorizeRequest;
+
+use crate::BoxFuture;
 
 #[derive(Clone)]
 pub(crate) struct Authenticator {
@@ -23,7 +24,7 @@ where
 {
     type RequestBody = B;
     type ResponseBody = Body;
-    type Future = BoxFuture<'static, Result<Request<B>, Response<Self::ResponseBody>>>;
+    type Future = BoxFuture<Result<Request<B>, Response<Self::ResponseBody>>>;
 
     fn authorize(&mut self, request: Request<B>) -> Self::Future {
         let data_root = self.data_root.clone();

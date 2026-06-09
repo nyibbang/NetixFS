@@ -2,7 +2,7 @@ use axum::serve::serve;
 pub(crate) use config::Config;
 use eyre::Result;
 use service::service;
-use std::{net::SocketAddr, sync::Arc};
+use std::{net::SocketAddr, pin::Pin, sync::Arc};
 use tokio::{net::TcpListener, spawn};
 use tracing::debug;
 
@@ -10,6 +10,8 @@ mod config;
 mod logging;
 mod service;
 mod user;
+
+type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send + 'static>>;
 
 #[tokio::main]
 async fn main() -> Result<()> {
