@@ -1,5 +1,5 @@
 use crate::config::Config;
-use crate::user::{Authenticator, User};
+use auth::{Authenticator, User};
 use axum::{
     Extension, Json, Router,
     body::Body,
@@ -27,6 +27,7 @@ use tower_http::{
     trace::{DefaultMakeSpan, DefaultOnFailure, DefaultOnResponse, TraceLayer},
 };
 
+mod auth;
 mod ready;
 
 async fn health() -> Json<Value> {

@@ -9,7 +9,6 @@ use tracing::debug;
 mod config;
 mod logging;
 mod service;
-mod user;
 
 type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send + 'static>>;
 
