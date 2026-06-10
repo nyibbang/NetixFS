@@ -6,6 +6,8 @@ use std::{net::SocketAddr, pin::Pin, sync::Arc};
 use tokio::{net::TcpListener, spawn};
 use tracing::debug;
 
+use crate::service::meta_services;
+
 mod config;
 mod logging;
 mod service;
@@ -40,6 +42,6 @@ async fn serve_main(config: Arc<Config>) -> Result<()> {
     let address = SocketAddr::new(config.server.bind_address.value, config.server.port.value);
     let listener = TcpListener::bind(address).await?;
     debug!(%address, "exposing service endpoint");
-    serve(listener, service(config)).await?;
+    serve(listener, service(config).merge(meta_services())).await?;
     Ok(())
 }

@@ -23,7 +23,6 @@ use tower_http::{
     auth::AsyncRequireAuthorizationLayer,
     decompression::RequestDecompressionLayer,
     on_early_drop::{EarlyDropsAsFailures, OnEarlyDropLayer},
-    timeout::TimeoutLayer,
     trace::{DefaultMakeSpan, DefaultOnFailure, DefaultOnResponse, TraceLayer},
 };
 
@@ -113,9 +112,12 @@ pub(crate) fn service(config: Arc<Config>) -> Router {
     let data_root = config.filesystem.allowed_roots.value[0].path.clone();
     let authenticator = Authenticator::new(data_root);
 
-    let middleware = ServiceBuilder::new()
-        // Mark the `Authorization` and `Cookie` headers as sensitive so it doesn't show in logs
-        .sensitive_headers([header::AUTHORIZATION, header::COOKIE])
+    let generic_middleware = ServiceBuilder::new()
+        // Report clients that disconnect before the response completes.
+        // Fires inside the TraceLayer span so events carry the request context.
+        .layer(OnEarlyDropLayer::new(EarlyDropsAsFailures::new(
+            DefaultOnFailure::default(),
+        )))
         // Add high level tracing/logging to all requests
         .layer(
             TraceLayer::new_for_http()
@@ -124,14 +126,11 @@ pub(crate) fn service(config: Arc<Config>) -> Router {
                 })
                 .make_span_with(DefaultMakeSpan::new().include_headers(true))
                 .on_response(DefaultOnResponse::new().include_headers(true))
-        )
-        // Report clients that disconnect before the response completes.
-        // Fires inside the TraceLayer span so events carry the request context.
-        .layer(OnEarlyDropLayer::new(EarlyDropsAsFailures::new(
-            DefaultOnFailure::default(),
-        )))
-        // Set a timeout
-        .layer(TimeoutLayer::with_status_code(StatusCode::REQUEST_TIMEOUT, Duration::from_secs(10)))
+        );
+
+    let middleware = ServiceBuilder::new()
+        // Mark the `Authorization` and `Cookie` headers as sensitive so it doesn't show in logs
+        .sensitive_headers([header::AUTHORIZATION, header::COOKIE])
         .compression()
         .layer(RequestDecompressionLayer::new())
         .layer(AsyncRequireAuthorizationLayer::new(authenticator))
@@ -141,11 +140,16 @@ pub(crate) fn service(config: Arc<Config>) -> Router {
         );
 
     Router::new()
-        .route("/healthz", get(health))
-        .route("/readyz", get(ready::run_checks))
+        .layer(generic_middleware)
         .route(
             "/{*path}",
             get(read_file).post(write_file).delete(delete_file),
         )
-        .layer(middleware)
+        .route_layer(middleware)
+}
+
+pub(crate) fn meta_services() -> Router {
+    Router::new()
+        .route("/healthz", get(health))
+        .route("/readyz", get(ready::run_checks))
 }
