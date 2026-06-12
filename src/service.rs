@@ -107,12 +107,9 @@ async fn delete_file(
 }
 
 pub(crate) fn service(config: Arc<Config>) -> Router {
-    // Use the first configured root as the data root for authentication.
-    // resolve() guarantees allowed_roots is non-empty.
-    let data_root = config.filesystem.allowed_roots.value[0].path.clone();
-    let authenticator = Authenticator::new(data_root);
-
     let generic_middleware = ServiceBuilder::new()
+        // Mark the `Authorization` and `Cookie` headers as sensitive so it doesn't show in logs
+        .sensitive_headers([header::AUTHORIZATION, header::COOKIE])
         // Report clients that disconnect before the response completes.
         // Fires inside the TraceLayer span so events carry the request context.
         .layer(OnEarlyDropLayer::new(EarlyDropsAsFailures::new(
@@ -129,11 +126,11 @@ pub(crate) fn service(config: Arc<Config>) -> Router {
         );
 
     let middleware = ServiceBuilder::new()
-        // Mark the `Authorization` and `Cookie` headers as sensitive so it doesn't show in logs
-        .sensitive_headers([header::AUTHORIZATION, header::COOKIE])
         .compression()
         .layer(RequestDecompressionLayer::new())
-        .layer(AsyncRequireAuthorizationLayer::new(authenticator))
+        .layer(AsyncRequireAuthorizationLayer::new(Authenticator::new(
+            Arc::clone(&config),
+        )))
         .insert_response_header_if_not_present(
             header::CONTENT_TYPE,
             HeaderValue::from_static("application/octet-stream"),
