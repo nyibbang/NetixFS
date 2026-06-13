@@ -27,6 +27,7 @@ use tower_http::{
 };
 
 mod auth;
+mod jwt;
 mod ready;
 
 async fn health() -> Json<Value> {

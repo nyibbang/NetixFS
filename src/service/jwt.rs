@@ -1,4 +1,4 @@
-use super::Error;
+use super::auth::Error;
 use crate::config::{Config, JwtSource};
 use jsonwebtoken::{DecodingKey, Validation, decode, decode_header};
 use reqwest::get;

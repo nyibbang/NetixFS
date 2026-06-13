@@ -1,3 +1,4 @@
+use super::jwt;
 use crate::{BoxFuture, config::Config};
 use axum::{
     Json,
@@ -11,8 +12,6 @@ use std::{
 };
 use tower_http::auth::AsyncAuthorizeRequest;
 use tracing::warn;
-
-mod jwt;
 
 #[derive(Clone)]
 pub(crate) struct Authenticator {
@@ -79,7 +78,7 @@ fn extract_bearer_token(headers: &HeaderMap) -> Result<String, Error> {
         .ok_or(Error::MissingOrInvalidHeader)
 }
 
-enum Error {
+pub(super) enum Error {
     MissingOrInvalidHeader,
     DecodeJwtHeader(jsonwebtoken::errors::Error),
     InvalidToken(jsonwebtoken::errors::Error),
