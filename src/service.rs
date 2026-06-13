@@ -23,6 +23,7 @@ use tower_http::{
     auth::AsyncRequireAuthorizationLayer,
     decompression::RequestDecompressionLayer,
     on_early_drop::{EarlyDropsAsFailures, OnEarlyDropLayer},
+    request_id::MakeRequestUuid,
     trace::{DefaultMakeSpan, DefaultOnFailure, DefaultOnResponse, TraceLayer},
 };
 
@@ -129,6 +130,7 @@ pub(crate) fn service(config: Arc<Config>) -> Router {
     let middleware = ServiceBuilder::new()
         .compression()
         .layer(RequestDecompressionLayer::new())
+        .set_x_request_id(MakeRequestUuid)
         .layer(AsyncRequireAuthorizationLayer::new(Authenticator::new(
             Arc::clone(&config),
         )))
