@@ -1,6 +1,5 @@
 use axum::serve::serve;
 pub(crate) use config::Config;
-pub(crate) use error::Error;
 use eyre::Result;
 use service::{meta_services, service};
 use std::{net::SocketAddr, pin::Pin, sync::Arc};
@@ -8,7 +7,6 @@ use tokio::{net::TcpListener, spawn};
 use tracing::debug;
 
 mod config;
-mod error;
 mod logging;
 mod service;
 

@@ -1,11 +1,15 @@
 use super::jwt;
-use crate::{BoxFuture, config::Config};
+use crate::{
+    BoxFuture,
+    config::Config,
+    service::{Error as ServiceError, RequestId},
+};
 use axum::{
-    Json,
     body::Body,
-    http::{HeaderMap, Request, Response, StatusCode, header},
+    http::{HeaderMap, HeaderValue, Request, Response, StatusCode, header},
     response::IntoResponse,
 };
+use futures::TryFutureExt;
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
@@ -32,29 +36,42 @@ where
     type ResponseBody = Body;
     type Future = BoxFuture<Result<Request<B>, Response<Self::ResponseBody>>>;
 
-    fn authorize(&mut self, request: Request<B>) -> Self::Future {
+    fn authorize(&mut self, mut request: Request<B>) -> Self::Future {
         let config = Arc::clone(&self.config);
-        Box::pin(async move {
-            match check_auth(&config, request).await {
-                Ok((user, mut request)) => {
-                    request.extensions_mut().insert(user);
-                    Ok(request)
-                }
-                Err(error) => {
-                    warn!(
-                        details = %error,
-                        // TODO: add request ID
-                        "authentication failure"
-                    );
-                    Err(error.into_response())
-                }
+        Box::pin(
+            async move {
+                let path = request.uri().path();
+                let request_id = request
+                    .extensions()
+                    .get::<tower_http::request_id::RequestId>()
+                    .cloned()
+                    .map(RequestId)
+                    .ok_or_else(|| {
+                        ServiceError::missing_request_id("".to_owned(), Some(path.to_owned()))
+                    })?; // TODO: set path and action
+                let user = authenticate_user(&config, request.headers())
+                    .await
+                    .map_err(|err| {
+                        warn!(
+                            details = %err,
+                            %request_id,
+                            "authentication failure"
+                        );
+                        err.into_service_error(Some(path.to_owned()), Some(request_id))
+                    })?;
+                request.extensions_mut().insert(user);
+                Ok(request)
             }
-        })
+            .map_err(ServiceError::into_response),
+        )
     }
 }
 
-async fn check_auth<B>(config: &Config, request: Request<B>) -> Result<(User, Request<B>), Error> {
-    let token = extract_bearer_token(request.headers())?;
+async fn authenticate_user(
+    config: &Config,
+    headers: &HeaderMap<HeaderValue>,
+) -> Result<User, Error> {
+    let token = extract_bearer_token(headers)?;
     let username = jwt::validate(config, token).await?;
     let user_data_root = config
         .filesystem
@@ -67,7 +84,7 @@ async fn check_auth<B>(config: &Config, request: Request<B>) -> Result<(User, Re
         name: username,
         data_root: user_data_root.path.clone(),
     };
-    Ok((user, request))
+    Ok(user)
 }
 
 fn extract_bearer_token(headers: &HeaderMap) -> Result<String, Error> {
@@ -110,29 +127,31 @@ impl std::fmt::Display for Error {
     }
 }
 
-impl IntoResponse for Error {
-    fn into_response(self) -> axum::response::Response {
+impl Error {
+    fn into_service_error(
+        self,
+        path: Option<String>,
+        request_id: Option<RequestId>,
+    ) -> ServiceError {
         let (status, retryable) = match &self {
             Error::InternalKeyVerification => (StatusCode::SERVICE_UNAVAILABLE, true),
             _ => (StatusCode::UNAUTHORIZED, false),
         };
 
-        let body = crate::Error {
+        ServiceError {
             code: status
                 .canonical_reason()
                 .unwrap_or("unknown")
                 .to_lowercase()
                 .replace(' ', "_"),
             message: self.to_string(),
-            status: status.as_u16(),
+            status,
             operation: "authentication".to_string(),
-            path: None, // TODO: Add path
+            path,
             errno: None,
             retryable,
-            request_id: String::new(), // TODO: add request ID
-        };
-
-        (status, Json(body)).into_response()
+            request_id,
+        }
     }
 }
 

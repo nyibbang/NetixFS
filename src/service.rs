@@ -9,13 +9,16 @@ use axum::{
     routing::get,
 };
 use bytes::Bytes;
+pub(crate) use error::Error;
 use eyre::Result;
+use serde::Serialize;
 use serde_json::{Value, json};
 use std::sync::Arc;
 use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
+use tokio::fs::File;
 use tokio_util::io::ReaderStream;
 use tower::ServiceBuilder;
 use tower_http::{
@@ -28,6 +31,7 @@ use tower_http::{
 };
 
 mod auth;
+mod error;
 mod jwt;
 mod ready;
 
@@ -54,7 +58,7 @@ async fn read_file(
     if !user_file_path.exists() {
         return Err(StatusCode::NOT_FOUND);
     }
-    let file = tokio::fs::File::open(&user_file_path)
+    let file = File::open(&user_file_path)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let file_stream = ReaderStream::new(file);
@@ -152,4 +156,26 @@ pub(crate) fn meta_services() -> Router {
     Router::new()
         .route("/healthz", get(health))
         .route("/readyz", get(ready::run_checks))
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct RequestId(tower_http::request_id::RequestId);
+
+impl std::fmt::Display for RequestId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        String::from_utf8_lossy(self.0.header_value().as_bytes()).fmt(f)
+    }
+}
+
+impl Serialize for RequestId {
+    fn serialize<S>(&self, serializer: S) -> std::prelude::v1::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let value = self.0.header_value();
+        match value.to_str() {
+            Ok(id) => id.serialize(serializer),
+            Err(_) => value.as_bytes().serialize(serializer),
+        }
+    }
 }
