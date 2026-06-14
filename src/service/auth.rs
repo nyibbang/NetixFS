@@ -40,6 +40,7 @@ where
         let config = Arc::clone(&self.config);
         Box::pin(
             async move {
+                let method = request.method();
                 let path = request.uri().path();
                 let request_id = request
                     .extensions()
@@ -47,8 +48,8 @@ where
                     .cloned()
                     .map(RequestId)
                     .ok_or_else(|| {
-                        ServiceError::missing_request_id("".to_owned(), Some(path.to_owned()))
-                    })?; // TODO: set path and action
+                        ServiceError::missing_request_id(method.to_string(), Some(path.to_owned()))
+                    })?;
                 let user = authenticate_user(&config, request.headers())
                     .await
                     .map_err(|err| {
