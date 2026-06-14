@@ -31,7 +31,7 @@ tokio = { version = "1.52.3", features = [
 tokio-util = "0.7.18"
 toml = "1.1.2"
 tower = "0.5.3"
-tower-http = { version = "0.6.11", features = ["auth", "compression-br", "cors", "decompression-br", "normalize-path", "on-early-drop", "request-id", "sensitive-headers", "set-header", "timeout", "trace", "tracing", "util"] }
+tower-http = { version = "0.6.11", features = ["auth", "compression-br", "cors", "decompression-br", "limit", "normalize-path", "on-early-drop", "request-id", "sensitive-headers", "set-header", "timeout", "trace", "tracing", "util"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["json"] }
 url = { version = "2.5.8", features = ["serde"] }

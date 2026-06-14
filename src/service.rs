@@ -134,6 +134,15 @@ pub(crate) fn service(config: Arc<Config>) -> Router {
     let middleware = ServiceBuilder::new()
         .compression()
         .layer(RequestDecompressionLayer::new())
+        .request_body_limit(
+            config
+                .limits
+                .max_request_body_size
+                .value
+                .as_u64()
+                .try_into()
+                .unwrap_or(usize::MAX),
+        )
         .set_x_request_id(MakeRequestUuid)
         .layer(AsyncRequireAuthorizationLayer::new(Authenticator::new(
             Arc::clone(&config),
