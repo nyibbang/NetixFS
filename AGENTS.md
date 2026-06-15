@@ -9,8 +9,8 @@
 - Use `clippy` for linting: `cargo clippy`
 - Prefer explicit error handling with `eyre`
 - Use `tracing` for logging (not `println!`)
-- Keep only one crate (`netixfs`) with eventually multiple binaries or
-  libraries in it.
+- Always use latest stable versions for new dependencies.
+- Keep only one crate (`netixfs`) with one executable (binary) in it.
 - Always collapse if statements per
   <https://rust-lang.github.io/rust-clippy/master/index.html#collapsible_if>
 - Always inline format! args when possible per
@@ -62,7 +62,9 @@ When contributing to NetixFS:
 
 1. **Read SPECS.md first** - It's the source of truth for all requirements
 2. **Follow the implementation plan** - Work on steps in order when possible
-3. **Write tests** - Especially for security-sensitive functionality
+3. **Write unit tests** - Especially for security-sensitive functionality.
+   Design code so that it is testable, do not rely on I/O such as files or
+   network to write tests. Use abstractions if necessary.
 4. **Use structured logging** - Include request context in logs
 5. **Handle errors properly** - Return structured JSON errors with request IDs
 6. **Respect POSIX semantics** - Delegate authorization to the Linux kernel
