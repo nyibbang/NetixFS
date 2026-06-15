@@ -1,5 +1,5 @@
 use crate::config::Config;
-use crate::user::{Authenticator, User};
+use auth::{Authenticator, User};
 use axum::{
     Extension, Json, Router,
     body::Body,
@@ -9,13 +9,16 @@ use axum::{
     routing::get,
 };
 use bytes::Bytes;
+pub(crate) use error::Error;
 use eyre::Result;
+use serde::Serialize;
 use serde_json::{Value, json};
 use std::sync::Arc;
 use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
+use tokio::fs::File;
 use tokio_util::io::ReaderStream;
 use tower::ServiceBuilder;
 use tower_http::{
@@ -23,10 +26,13 @@ use tower_http::{
     auth::AsyncRequireAuthorizationLayer,
     decompression::RequestDecompressionLayer,
     on_early_drop::{EarlyDropsAsFailures, OnEarlyDropLayer},
-    timeout::TimeoutLayer,
+    request_id::MakeRequestUuid,
     trace::{DefaultMakeSpan, DefaultOnFailure, DefaultOnResponse, TraceLayer},
 };
 
+mod auth;
+mod error;
+mod jwt;
 mod ready;
 
 async fn health() -> Json<Value> {
@@ -52,7 +58,7 @@ async fn read_file(
     if !user_file_path.exists() {
         return Err(StatusCode::NOT_FOUND);
     }
-    let file = tokio::fs::File::open(&user_file_path)
+    let file = File::open(&user_file_path)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let file_stream = ReaderStream::new(file);
@@ -107,14 +113,14 @@ async fn delete_file(
 }
 
 pub(crate) fn service(config: Arc<Config>) -> Router {
-    // Use the first configured root as the data root for authentication.
-    // resolve() guarantees allowed_roots is non-empty.
-    let data_root = config.filesystem.allowed_roots.value[0].path.clone();
-    let authenticator = Authenticator::new(data_root);
-
-    let middleware = ServiceBuilder::new()
+    let generic_middleware = ServiceBuilder::new()
         // Mark the `Authorization` and `Cookie` headers as sensitive so it doesn't show in logs
         .sensitive_headers([header::AUTHORIZATION, header::COOKIE])
+        // Report clients that disconnect before the response completes.
+        // Fires inside the TraceLayer span so events carry the request context.
+        .layer(OnEarlyDropLayer::new(EarlyDropsAsFailures::new(
+            DefaultOnFailure::default(),
+        )))
         // Add high level tracing/logging to all requests
         .layer(
             TraceLayer::new_for_http()
@@ -123,28 +129,62 @@ pub(crate) fn service(config: Arc<Config>) -> Router {
                 })
                 .make_span_with(DefaultMakeSpan::new().include_headers(true))
                 .on_response(DefaultOnResponse::new().include_headers(true))
-        )
-        // Report clients that disconnect before the response completes.
-        // Fires inside the TraceLayer span so events carry the request context.
-        .layer(OnEarlyDropLayer::new(EarlyDropsAsFailures::new(
-            DefaultOnFailure::default(),
-        )))
-        // Set a timeout
-        .layer(TimeoutLayer::with_status_code(StatusCode::REQUEST_TIMEOUT, Duration::from_secs(10)))
+        );
+
+    let middleware = ServiceBuilder::new()
         .compression()
         .layer(RequestDecompressionLayer::new())
-        .layer(AsyncRequireAuthorizationLayer::new(authenticator))
+        .request_body_limit(
+            config
+                .limits
+                .max_request_body_size
+                .value
+                .as_u64()
+                .try_into()
+                .unwrap_or(usize::MAX),
+        )
+        .set_x_request_id(MakeRequestUuid)
+        .layer(AsyncRequireAuthorizationLayer::new(Authenticator::new(
+            Arc::clone(&config),
+        )))
         .insert_response_header_if_not_present(
             header::CONTENT_TYPE,
             HeaderValue::from_static("application/octet-stream"),
         );
 
     Router::new()
-        .route("/healthz", get(health))
-        .route("/readyz", get(ready::run_checks))
+        .layer(generic_middleware)
         .route(
             "/{*path}",
             get(read_file).post(write_file).delete(delete_file),
         )
-        .layer(middleware)
+        .route_layer(middleware)
+}
+
+pub(crate) fn meta_services() -> Router {
+    Router::new()
+        .route("/healthz", get(health))
+        .route("/readyz", get(ready::run_checks))
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct RequestId(tower_http::request_id::RequestId);
+
+impl std::fmt::Display for RequestId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        String::from_utf8_lossy(self.0.header_value().as_bytes()).fmt(f)
+    }
+}
+
+impl Serialize for RequestId {
+    fn serialize<S>(&self, serializer: S) -> std::prelude::v1::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let value = self.0.header_value();
+        match value.to_str() {
+            Ok(id) => id.serialize(serializer),
+            Err(_) => value.as_bytes().serialize(serializer),
+        }
+    }
 }
