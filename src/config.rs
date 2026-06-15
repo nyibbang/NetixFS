@@ -813,7 +813,7 @@ mod tests {
     // ── Root ─────────────────────────────────────────────────────────────────
 
     #[test]
-    fn test_root_from_str_valid() {
+    fn root_from_str_valid_formats() {
         let root: Root = "myroot=/path/to/root".parse().unwrap();
         assert_eq!(root.id, "myroot");
         assert_eq!(root.path, PathBuf::from("/path/to/root"));
@@ -830,13 +830,13 @@ mod tests {
     }
 
     #[test]
-    fn test_root_from_str_missing_separator() {
+    fn root_from_str_missing_separator_returns_error() {
         let result: Result<Root> = "myroot/path/to/root".parse();
         assert!(result.is_err());
     }
 
     #[test]
-    fn test_root_from_str_empty_id() {
+    fn root_from_str_empty_id_returns_error() {
         let result: Result<Root> = "=/path/to/root".parse();
         assert!(result.is_err());
         assert!(
@@ -848,7 +848,7 @@ mod tests {
     }
 
     #[test]
-    fn test_root_from_str_empty_path() {
+    fn root_from_str_empty_path_returns_error() {
         let result: Result<Root> = "myroot=".parse();
         assert!(result.is_err());
         assert!(
@@ -862,7 +862,7 @@ mod tests {
     // ── FileMode ─────────────────────────────────────────────────────────────
 
     #[test]
-    fn test_file_mode_from_str_octal_formats() {
+    fn file_mode_from_str_accepts_octal_formats() {
         // Standard octal with leading zero
         let mode: FileMode = "0644".parse().unwrap();
         assert_eq!(mode.value(), 0o644);
@@ -889,7 +889,7 @@ mod tests {
     }
 
     #[test]
-    fn test_file_mode_from_str_invalid() {
+    fn file_mode_from_str_invalid_input_returns_error() {
         // Invalid characters
         let result: Result<FileMode> = "6x4".parse();
         assert!(result.is_err());
@@ -909,7 +909,7 @@ mod tests {
     }
 
     #[test]
-    fn test_file_mode_display() {
+    fn file_mode_display_uses_octal_without_leading_zero() {
         let mode = FileMode(0o644);
         assert_eq!(format!("{}", mode), "644");
 
@@ -920,7 +920,7 @@ mod tests {
     // ── LogLevel ────────────────────────────────────────────────────────────
 
     #[test]
-    fn test_log_level_serialization() {
+    fn log_level_serializes_to_lowercase_string() {
         let level = LogLevel::Error;
         let serialized = serde_json::to_string(&level).unwrap();
         assert_eq!(serialized, "\"error\"");
@@ -945,7 +945,7 @@ mod tests {
     // ── LogFormat ────────────────────────────────────────────────────────────
 
     #[test]
-    fn test_log_format_serialization() {
+    fn log_format_serializes_to_lowercase_string() {
         let format = LogFormat::Json;
         let serialized = serde_json::to_string(&format).unwrap();
         assert_eq!(serialized, "\"json\"");
@@ -962,7 +962,7 @@ mod tests {
     // ── SymlinkPolicy ────────────────────────────────────────────────────────
 
     #[test]
-    fn test_symlink_policy_serialization() {
+    fn symlink_policy_serializes_to_lowercase_snake_case() {
         let policy = SymlinkPolicy::Reject;
         let serialized = serde_json::to_string(&policy).unwrap();
         assert_eq!(serialized, "\"reject\"");
@@ -975,7 +975,7 @@ mod tests {
     // ── Value<T> ─────────────────────────────────────────────────────────────
 
     #[test]
-    fn test_value_map() {
+    fn value_map_transforms_inner_value_preserving_metadata() {
         let value = Value {
             value: 42u32,
             source: ValueSource::Default,
@@ -993,7 +993,7 @@ mod tests {
     }
 
     #[test]
-    fn test_value_try_map() {
+    fn value_try_map_propagates_transformation_errors() {
         let value = Value {
             value: "42".to_string(),
             source: ValueSource::Default,
@@ -1023,7 +1023,7 @@ mod tests {
     }
 
     #[test]
-    fn test_value_option_transpose() {
+    fn value_option_transpose_lifts_inner_option() {
         let value: Value<Option<u32>> = Value {
             value: Some(42),
             source: ValueSource::Default,
@@ -1055,7 +1055,7 @@ mod tests {
     // ── JwtSource validation ──────────────────────────────────────────────────
 
     #[test]
-    fn test_jwt_source_resolve_single_path() {
+    fn jwt_source_resolve_accepts_single_public_key_path() {
         let public_key_path = Value {
             value: Some(PathBuf::from("/path/to/key.pub")),
             source: ValueSource::Argument,
@@ -1105,7 +1105,7 @@ mod tests {
     }
 
     #[test]
-    fn test_jwt_source_resolve_no_source() {
+    fn jwt_source_resolve_no_source_provided_returns_error() {
         let public_key_path = Value {
             value: None,
             source: ValueSource::Default,
@@ -1154,7 +1154,7 @@ mod tests {
     }
 
     #[test]
-    fn test_jwt_source_resolve_multiple_sources() {
+    fn jwt_source_resolve_multiple_sources_returns_error() {
         let public_key_path = Value {
             value: Some(PathBuf::from("/path/to/key.pub")),
             source: ValueSource::Argument,
@@ -1205,7 +1205,7 @@ mod tests {
     // ── TlsConfig ────────────────────────────────────────────────────────────
 
     #[test]
-    fn test_tls_config_resolve_enabled_with_certs() {
+    fn tls_config_enabled_with_cert_and_key_resolves() {
         // Use TOML config to set TLS enabled with cert and key
         let arguments = command().get_matches_from(Vec::<OsString>::new());
 
@@ -1238,7 +1238,7 @@ mod tests {
     }
 
     #[test]
-    fn test_tls_config_resolve_enabled_without_certs() {
+    fn tls_config_enabled_without_cert_path_returns_error() {
         // Use TOML config with TLS enabled but no cert/key paths
         let arguments = command().get_matches_from(Vec::<OsString>::new());
 
@@ -1259,7 +1259,7 @@ mod tests {
     }
 
     #[test]
-    fn test_tls_config_resolve_enabled_without_key() {
+    fn tls_config_enabled_without_key_path_returns_error() {
         // Use TOML config with TLS enabled and cert path but no key path
         let arguments = command().get_matches_from(Vec::<OsString>::new());
 
@@ -1281,7 +1281,7 @@ mod tests {
     }
 
     #[test]
-    fn test_tls_config_resolve_disabled() {
+    fn tls_config_disabled_without_certs_resolves() {
         // Create arguments with TLS disabled (default) and no cert/key paths
         let arguments = command()
             .try_get_matches_from(Vec::<OsString>::new())
@@ -1302,7 +1302,7 @@ mod tests {
     // ── CorsConfig ───────────────────────────────────────────────────────────
 
     #[test]
-    fn test_cors_config_resolve_enabled_requires_origins() {
+    fn cors_config_enabled_requires_origins() {
         // Create a minimal resolver that returns enabled=true and empty origins
         // This is tested through the actual resolve logic
     }
@@ -1310,7 +1310,7 @@ mod tests {
     // ── FilesystemConfig ─────────────────────────────────────────────────────
 
     #[test]
-    fn test_filesystem_config_resolve_requires_roots() {
+    fn filesystem_config_requires_at_least_one_root() {
         // This validation happens in FilesystemConfig::resolve
         // We'll test it indirectly through config loading
     }
@@ -1318,7 +1318,7 @@ mod tests {
     // ── Value ────────────────────────────────────────────────────────────────
 
     #[test]
-    fn test_value_serialize_non_sensitive() {
+    fn value_serializes_actual_value_when_not_sensitive() {
         let value = Value {
             value: "test_value".to_string(),
             source: ValueSource::Argument,
@@ -1338,7 +1338,7 @@ mod tests {
     }
 
     #[test]
-    fn test_value_serialize_sensitive() {
+    fn value_serializes_redacted_string_when_sensitive() {
         let value = Value {
             value: "secret_password".to_string(),
             source: ValueSource::Environment,
@@ -1357,7 +1357,7 @@ mod tests {
     // ── Config ───────────────────────────────────────────────────────────────
 
     #[test]
-    fn test_config_resolve_with_toml_file() {
+    fn config_resolve_reads_toml_values_into_config() {
         let arguments = command()
             .try_get_matches_from(Vec::<OsString>::new())
             .unwrap();
@@ -1394,7 +1394,7 @@ mod tests {
     }
 
     #[test]
-    fn test_config_resolve_source_priority_cli_overrides_toml() {
+    fn config_resolve_cli_args_override_toml_values() {
         let arguments = command()
             .try_get_matches_from(vec![OsString::from("--port"), OsString::from("9999")])
             .unwrap();
@@ -1447,7 +1447,7 @@ mod tests {
     }
 
     #[test]
-    fn test_config_resolve_defaults_used_when_no_source() {
+    fn config_resolve_missing_mandatory_fields_returns_error() {
         let arguments = command()
             .try_get_matches_from(Vec::<OsString>::new())
             .unwrap();
@@ -1472,7 +1472,7 @@ mod tests {
     }
 
     #[test]
-    fn test_config_resolve_with_filesystem_roots_from_toml() {
+    fn config_resolve_parses_filesystem_roots_from_toml() {
         let arguments = command()
             .try_get_matches_from(Vec::<OsString>::new())
             .unwrap();
@@ -1522,7 +1522,7 @@ mod tests {
     }
 
     #[test]
-    fn test_config_resolve_source_tracking() {
+    fn config_resolve_tracks_value_sources() {
         let arguments = command()
             .try_get_matches_from(Vec::<OsString>::new())
             .unwrap();
