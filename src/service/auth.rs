@@ -96,6 +96,7 @@ fn extract_bearer_token(headers: &HeaderMap) -> Result<String, Error> {
         .ok_or(Error::MissingOrInvalidHeader)
 }
 
+#[derive(Debug)]
 pub(super) enum Error {
     MissingOrInvalidHeader,
     DecodeJwtHeader(jsonwebtoken::errors::Error),
@@ -165,5 +166,136 @@ pub(crate) struct User {
 impl User {
     pub(crate) fn data_root(&self) -> &Path {
         &self.data_root
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Error, extract_bearer_token};
+    use axum::http::{HeaderMap, StatusCode, header};
+
+    // ── extract_bearer_token ──────────────────────────────────────────────────
+
+    #[test]
+    fn extract_bearer_token_missing_header_returns_error() {
+        let headers = HeaderMap::new();
+        assert!(matches!(extract_bearer_token(&headers), Err(Error::MissingOrInvalidHeader)));
+    }
+
+    #[test]
+    fn extract_bearer_token_non_bearer_scheme_returns_error() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::AUTHORIZATION, "Basic dXNlcjpwYXNz".parse().unwrap());
+        assert!(matches!(extract_bearer_token(&headers), Err(Error::MissingOrInvalidHeader)));
+    }
+
+    #[test]
+    fn extract_bearer_token_missing_space_after_bearer_returns_error() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::AUTHORIZATION, "Bearertoken".parse().unwrap());
+        assert!(matches!(extract_bearer_token(&headers), Err(Error::MissingOrInvalidHeader)));
+    }
+
+    #[test]
+    fn extract_bearer_token_lowercase_bearer_is_rejected() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::AUTHORIZATION, "bearer some-token".parse().unwrap());
+        assert!(matches!(extract_bearer_token(&headers), Err(Error::MissingOrInvalidHeader)));
+    }
+
+    #[test]
+    fn extract_bearer_token_valid_header_returns_token_string() {
+        let token = "eyJhbGciOiJSUzI1NiJ9.e30.sig";
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::AUTHORIZATION,
+            format!("Bearer {token}").parse().unwrap(),
+        );
+        assert_eq!(extract_bearer_token(&headers).unwrap(), token);
+    }
+
+    // ── Error Display ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn error_display_messages_match_specification() {
+        use jsonwebtoken::errors::{Error as JwtError, ErrorKind};
+        let jwt_err = JwtError::from(ErrorKind::InvalidToken);
+
+        assert_eq!(
+            Error::MissingOrInvalidHeader.to_string(),
+            r#"missing or invalid "Authorization" header"#,
+        );
+        assert!(
+            Error::DecodeJwtHeader(jwt_err.clone())
+                .to_string()
+                .starts_with("failed to decode JWT header:"),
+        );
+        assert!(
+            Error::InvalidToken(jwt_err)
+                .to_string()
+                .starts_with("invalid token:"),
+        );
+        assert_eq!(
+            Error::MissingKidClaim.to_string(),
+            r#"JWT missing "kid" claim, required for JWKS"#,
+        );
+        assert_eq!(
+            Error::KidNotFound("my-key-id".to_string()).to_string(),
+            r#"JWT "kid" 'my-key-id' not found in JWKS"#,
+        );
+        assert_eq!(
+            Error::MissingUsernameClaim("sub".to_string()).to_string(),
+            "JWT missing configured username claim 'sub'",
+        );
+        assert_eq!(
+            Error::InternalKeyVerification.to_string(),
+            "internal key verification error",
+        );
+        assert_eq!(
+            Error::UserNotFound("alice".to_string()).to_string(),
+            "user alice not found",
+        );
+    }
+
+    // ── Error::into_service_error ─────────────────────────────────────────────
+
+    #[test]
+    fn into_service_error_internal_key_verification_is_503_and_retryable() {
+        let service_error =
+            Error::InternalKeyVerification.into_service_error(Some("/test".to_string()), None);
+        assert_eq!(service_error.status, StatusCode::SERVICE_UNAVAILABLE);
+        assert!(service_error.retryable);
+        assert_eq!(service_error.operation, "authentication");
+    }
+
+    #[test]
+    fn into_service_error_all_other_errors_are_401_and_not_retryable() {
+        use jsonwebtoken::errors::{Error as JwtError, ErrorKind};
+
+        macro_rules! assert_401_not_retryable {
+            ($err:expr) => {
+                let service_error = $err.into_service_error(None, None);
+                assert_eq!(service_error.status, StatusCode::UNAUTHORIZED);
+                assert!(!service_error.retryable);
+            };
+        }
+
+        assert_401_not_retryable!(Error::MissingOrInvalidHeader);
+        assert_401_not_retryable!(Error::DecodeJwtHeader(JwtError::from(ErrorKind::InvalidToken)));
+        assert_401_not_retryable!(Error::InvalidToken(JwtError::from(ErrorKind::InvalidToken)));
+        assert_401_not_retryable!(Error::MissingKidClaim);
+        assert_401_not_retryable!(Error::KidNotFound("k".into()));
+        assert_401_not_retryable!(Error::MissingUsernameClaim("sub".into()));
+        assert_401_not_retryable!(Error::UserNotFound("alice".into()));
+    }
+
+    #[test]
+    fn into_service_error_sets_correct_path_and_operation() {
+        let service_error = Error::MissingOrInvalidHeader
+            .into_service_error(Some("projects/file.txt".to_string()), None);
+        assert_eq!(service_error.path, Some("projects/file.txt".to_string()));
+        assert_eq!(service_error.operation, "authentication");
+        assert_eq!(service_error.errno, None);
+        assert_eq!(service_error.code, "unauthorized");
     }
 }
