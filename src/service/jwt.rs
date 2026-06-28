@@ -152,7 +152,8 @@ mod tests {
     use crate::config;
     use jsonwebtoken::{Algorithm, EncodingKey, Header};
     use serde_json::json;
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::{io::Write, path::Path};
+    use tempfile::NamedTempFile;
 
     // RSA-2048 PKCS#8 key pair used exclusively for tests. These are not secret.
     const RSA_PRIVATE_KEY: &str = "-----BEGIN PRIVATE KEY-----\n\
@@ -194,26 +195,35 @@ mod tests {
         dQIDAQAB\n\
         -----END PUBLIC KEY-----\n";
 
-    static FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
-
-    fn write_temp(content: &str, ext: &str) -> std::path::PathBuf {
-        let n = FILE_COUNTER.fetch_add(1, Ordering::SeqCst);
-        let path = std::env::temp_dir()
-            .join(format!("netixfs_jwt_test_{}_{}.{}", std::process::id(), n, ext));
-        std::fs::write(&path, content).expect("temp file write failed");
-        path
+    fn write_temp(content: &str) -> NamedTempFile {
+        let mut file = NamedTempFile::new().expect("failed to create temp file");
+        file.write_all(content.as_bytes())
+            .expect("temp file write failed");
+        file
     }
 
-    fn config_pubkey(key_path: &std::path::Path) -> config::Config {
+    fn config_pubkey(key_path: &Path) -> config::Config {
         let path_str = key_path.to_str().expect("path is valid UTF-8");
-        config::load(["netixfs", "--allowed-root", "home=/tmp", "--jwt-public-key-path", path_str])
-            .expect("config creation failed")
+        config::load([
+            "netixfs",
+            "--allowed-root",
+            "home=/tmp",
+            "--jwt-public-key-path",
+            path_str,
+        ])
+        .expect("config creation failed")
     }
 
-    fn config_jwks(jwks_path: &std::path::Path) -> config::Config {
+    fn config_jwks(jwks_path: &Path) -> config::Config {
         let path_str = jwks_path.to_str().expect("path is valid UTF-8");
-        config::load(["netixfs", "--allowed-root", "home=/tmp", "--jwt-jwks-path", path_str])
-            .expect("config creation failed")
+        config::load([
+            "netixfs",
+            "--allowed-root",
+            "home=/tmp",
+            "--jwt-jwks-path",
+            path_str,
+        ])
+        .expect("config creation failed")
     }
 
     fn future_exp() -> u64 {
@@ -237,10 +247,9 @@ mod tests {
 
     #[tokio::test]
     async fn validate_completely_invalid_token_returns_decode_jwt_header_error() {
-        let key_path = write_temp(RSA_PUBLIC_KEY, "pem");
-        let config = config_pubkey(&key_path);
+        let key_file = write_temp(RSA_PUBLIC_KEY);
+        let config = config_pubkey(key_file.path());
         let result = validate(&config, "not-a-jwt".to_string()).await;
-        let _ = std::fs::remove_file(&key_path);
         assert!(matches!(result, Err(Error::DecodeJwtHeader(_))));
     }
 
@@ -248,8 +257,8 @@ mod tests {
 
     #[tokio::test]
     async fn validate_jwks_path_token_without_kid_returns_missing_kid_claim() {
-        let jwks = write_temp(r#"{"keys":[]}"#, "json");
-        let config = config_jwks(&jwks);
+        let jwks_file = write_temp(r#"{"keys":[]}"#);
+        let config = config_jwks(jwks_file.path());
         // Token signed with HS256 (no kid in header) — error occurs before signature check.
         let token = jsonwebtoken::encode(
             &Header::new(Algorithm::HS256),
@@ -258,14 +267,13 @@ mod tests {
         )
         .unwrap();
         let result = validate(&config, token).await;
-        let _ = std::fs::remove_file(&jwks);
         assert!(matches!(result, Err(Error::MissingKidClaim)));
     }
 
     #[tokio::test]
     async fn validate_jwks_path_token_with_unknown_kid_returns_kid_not_found() {
-        let jwks = write_temp(r#"{"keys":[]}"#, "json");
-        let config = config_jwks(&jwks);
+        let jwks_file = write_temp(r#"{"keys":[]}"#);
+        let config = config_jwks(jwks_file.path());
         let mut header = Header::new(Algorithm::HS256);
         header.kid = Some("unknown-kid".to_string());
         let token = jsonwebtoken::encode(
@@ -275,22 +283,18 @@ mod tests {
         )
         .unwrap();
         let result = validate(&config, token).await;
-        let _ = std::fs::remove_file(&jwks);
-        assert!(
-            matches!(result, Err(Error::KidNotFound(kid)) if kid == "unknown-kid"),
-        );
+        assert!(matches!(result, Err(Error::KidNotFound(kid)) if kid == "unknown-kid"),);
     }
 
     // ── PublicKey path errors ─────────────────────────────────────────────────
 
     #[tokio::test]
     async fn validate_public_key_path_invalid_pem_returns_internal_error() {
-        let key_path = write_temp("this is not a PEM file", "pem");
-        let config = config_pubkey(&key_path);
+        let key_file = write_temp("this is not a PEM file");
+        let config = config_pubkey(key_file.path());
         // The header of any validly-encoded JWT suffices; we fail before signature verification.
         let token = sign_rs256(&json!({"sub": "alice", "exp": future_exp()}), None);
         let result = validate(&config, token).await;
-        let _ = std::fs::remove_file(&key_path);
         assert!(matches!(result, Err(Error::InternalKeyVerification)));
     }
 
@@ -298,47 +302,51 @@ mod tests {
 
     #[tokio::test]
     async fn validate_expired_token_returns_invalid_token_error() {
-        let key_path = write_temp(RSA_PUBLIC_KEY, "pem");
-        let config = config_pubkey(&key_path);
+        let key_file = write_temp(RSA_PUBLIC_KEY);
+        let config = config_pubkey(key_file.path());
         let token = sign_rs256(&json!({"sub": "alice", "exp": 1000u64}), None);
         let result = validate(&config, token).await;
-        let _ = std::fs::remove_file(&key_path);
         assert!(matches!(result, Err(Error::InvalidToken(_))));
     }
 
     #[tokio::test]
     async fn validate_issuer_mismatch_returns_invalid_token_error() {
-        let key_path = write_temp(RSA_PUBLIC_KEY, "pem");
-        let path_str = key_path.to_str().unwrap();
+        let key_file = write_temp(RSA_PUBLIC_KEY);
+        let key_file_path = key_file
+            .path()
+            .to_str()
+            .expect("key file path is valid UTF-8");
         let config = config::load([
             "netixfs",
             "--allowed-root",
             "home=/tmp",
             "--jwt-public-key-path",
-            path_str,
+            key_file_path,
             "--jwt-issuer",
             "https://expected-issuer.example.com",
         ])
-        .unwrap();
+        .expect("config file succssfully loads");
         let token = sign_rs256(
             &json!({"sub": "alice", "exp": future_exp(), "iss": "https://wrong-issuer.example.com"}),
             None,
         );
         let result = validate(&config, token).await;
-        let _ = std::fs::remove_file(&key_path);
         assert!(matches!(result, Err(Error::InvalidToken(_))));
     }
 
     #[tokio::test]
     async fn validate_audience_mismatch_returns_invalid_token_error() {
-        let key_path = write_temp(RSA_PUBLIC_KEY, "pem");
-        let path_str = key_path.to_str().unwrap();
+        let key_file = write_temp(RSA_PUBLIC_KEY);
+        let key_file_path = key_file
+            .path()
+            .to_str()
+            .expect("key file path is valid UTF-8");
         let config = config::load([
             "netixfs",
             "--allowed-root",
             "home=/tmp",
             "--jwt-public-key-path",
-            path_str,
+            key_file_path,
             "--jwt-audience",
             "my-api",
         ])
@@ -349,20 +357,22 @@ mod tests {
             None,
         );
         let result = validate(&config, token).await;
-        let _ = std::fs::remove_file(&key_path);
         assert!(matches!(result, Err(Error::InvalidToken(_))));
     }
 
     #[tokio::test]
     async fn validate_missing_configured_username_claim_returns_error() {
-        let key_path = write_temp(RSA_PUBLIC_KEY, "pem");
-        let path_str = key_path.to_str().unwrap();
+        let key_file = write_temp(RSA_PUBLIC_KEY);
+        let key_file_path = key_file
+            .path()
+            .to_str()
+            .expect("key file path is valid UTF-8");
         let config = config::load([
             "netixfs",
             "--allowed-root",
             "home=/tmp",
             "--jwt-public-key-path",
-            path_str,
+            key_file_path,
             "--jwt-username-claim",
             "username",
         ])
@@ -370,21 +380,17 @@ mod tests {
         // Token has "sub" but the config expects "username" claim.
         let token = sign_rs256(&json!({"sub": "alice", "exp": future_exp()}), None);
         let result = validate(&config, token).await;
-        let _ = std::fs::remove_file(&key_path);
-        assert!(
-            matches!(result, Err(Error::MissingUsernameClaim(claim)) if claim == "username"),
-        );
+        assert!(matches!(result, Err(Error::MissingUsernameClaim(claim)) if claim == "username"),);
     }
 
     // ── Happy path ────────────────────────────────────────────────────────────
 
     #[tokio::test]
     async fn validate_valid_token_returns_username_from_configured_claim() {
-        let key_path = write_temp(RSA_PUBLIC_KEY, "pem");
-        let config = config_pubkey(&key_path);
+        let key_file = write_temp(RSA_PUBLIC_KEY);
+        let config = config_pubkey(key_file.path());
         let token = sign_rs256(&json!({"sub": "alice", "exp": future_exp()}), None);
         let result = validate(&config, token).await;
-        let _ = std::fs::remove_file(&key_path);
         assert_eq!(result.unwrap(), "alice");
     }
 }
