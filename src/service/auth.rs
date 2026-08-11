@@ -80,31 +80,16 @@ where
 }
 
 async fn lookup_user(config: &Config, token: String) -> Result<User, Error> {
-    let username = jwt::validate(config, token).await?;
-    let data_root = match config
-        .filesystem
-        .allowed_roots
-        .value
-        .iter()
-        .find(|root| root.id == username)
-        .map(|root| &root.path)
-    {
-        Some(root) => root,
-        None => return Err(Error::UserNotFound(username)),
-    };
-    match user::resolve(username.clone()).await {
-        Ok(identity) => Ok(User {
-            name: username,
-            data_root: data_root.to_owned(),
-            identity,
-        }),
+    let name = jwt::validate(config, token).await?;
+    match user::resolve(name.clone()).await {
+        Ok(identity) => Ok(User { name, identity }),
         Err(err) => {
             warn!(
-                %username,
+                username = %name,
                 details = %err,
                 "failed to resolve local identity"
             );
-            Err(Error::NssLookupFailed(username))
+            Err(Error::NssLookupFailed(name))
         }
     }
 }

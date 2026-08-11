@@ -1,4 +1,3 @@
-use std::path::{Path, PathBuf};
 use tokio::task;
 use uzers::get_user_by_name;
 
@@ -6,14 +5,7 @@ use uzers::get_user_by_name;
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct User {
     pub(super) name: String,
-    pub(super) data_root: PathBuf,
     pub(super) identity: Identity,
-}
-
-impl User {
-    pub(crate) fn data_root(&self) -> &Path {
-        &self.data_root
-    }
 }
 
 /// Local Linux identity resolved through NSS for a JWT-authenticated user.

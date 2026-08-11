@@ -14,12 +14,7 @@ use eyre::Result;
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::sync::Arc;
-use std::{
-    path::{Path, PathBuf},
-    time::Duration,
-};
-use tokio::fs::File;
-use tokio_util::io::ReaderStream;
+use std::time::Duration;
 use tower::ServiceBuilder;
 use tower_http::{
     ServiceBuilderExt,
@@ -40,30 +35,31 @@ async fn health() -> Json<Value> {
     Json(json!({ "status": "ok" }))
 }
 
-fn sanitize_path(user_data_root: &Path, file_path: String) -> Result<PathBuf, StatusCode> {
-    let file_path = user_data_root
-        .join(&file_path)
-        .canonicalize()
-        .map_err(|_| StatusCode::NOT_FOUND)?;
-    if !file_path.starts_with(user_data_root) {
-        return Err(StatusCode::FORBIDDEN);
-    }
-    Ok(file_path)
-}
+// fn sanitize_path(user_data_root: &Path, file_path: String) -> Result<PathBuf, StatusCode> {
+//     let file_path = user_data_root
+//         .join(&file_path)
+//         .canonicalize()
+//         .map_err(|_| StatusCode::NOT_FOUND)?;
+//     if !file_path.starts_with(user_data_root) {
+//         return Err(StatusCode::FORBIDDEN);
+//     }
+//     Ok(file_path)
+// }
 
 async fn read_file(
-    Extension(user): Extension<User>,
-    RequestPath(file_path): RequestPath<String>,
+    Extension(_user): Extension<User>,
+    RequestPath(_file_path): RequestPath<String>,
 ) -> Result<Response, StatusCode> {
-    let user_file_path = sanitize_path(user.data_root(), file_path)?;
-    if !user_file_path.exists() {
-        return Err(StatusCode::NOT_FOUND);
-    }
-    let file = File::open(&user_file_path)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let file_stream = ReaderStream::new(file);
-    Ok(Body::from_stream(file_stream).into_response())
+    // let user_file_path = sanitize_path(user.data_root(), file_path)?;
+    // if !user_file_path.exists() {
+    //     return Err(StatusCode::NOT_FOUND);
+    // }
+    // let file = File::open(&user_file_path)
+    //     .await
+    //     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    // let file_stream = ReaderStream::new(file);
+    // Ok(Body::from_stream(file_stream).into_response())
+    Ok(Body::empty().into_response())
 }
 
 async fn write_file(
