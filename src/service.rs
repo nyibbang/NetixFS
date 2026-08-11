@@ -34,6 +34,7 @@ mod auth;
 mod error;
 mod jwt;
 mod ready;
+mod user;
 
 async fn health() -> Json<Value> {
     Json(json!({ "status": "ok" }))

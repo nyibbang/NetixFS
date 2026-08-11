@@ -1,4 +1,4 @@
-use super::jwt;
+use super::{jwt, user};
 use crate::{
     BoxFuture,
     config::Config,
@@ -6,24 +6,27 @@ use crate::{
 };
 use axum::{
     body::Body,
-    http::{HeaderMap, HeaderValue, Request, Response, StatusCode, header},
+    http::{self, HeaderMap, Response, StatusCode, header},
     response::IntoResponse,
 };
-use futures::TryFutureExt;
-use std::{
-    path::{Path, PathBuf},
-    sync::Arc,
-};
+use futures::{FutureExt, TryFutureExt};
+use std::sync::Arc;
 use tower_http::auth::AsyncAuthorizeRequest;
 use tracing::warn;
+pub(crate) use user::User;
 
+/// An authenticator for HTTP requests.
+///
+/// It checks that each request has an authorization header containing a Bearer token, validates it
+/// as a JSON Web Token, finds the Linux user associated to this token and gets the roots that are
+/// configured for this user.
 #[derive(Clone)]
 pub(crate) struct Authenticator {
     config: Arc<Config>,
 }
 
 impl Authenticator {
-    pub(crate) fn new(config: Arc<Config>) -> Self {
+    pub(super) fn new(config: Arc<Config>) -> Self {
         Self { config }
     }
 }
@@ -34,61 +37,79 @@ where
 {
     type RequestBody = B;
     type ResponseBody = Body;
-    type Future = BoxFuture<Result<Request<B>, Response<Self::ResponseBody>>>;
+    type Future = BoxFuture<Result<http::Request<B>, Response<Self::ResponseBody>>>;
 
-    fn authorize(&mut self, mut request: Request<B>) -> Self::Future {
+    fn authorize(&mut self, mut request: http::Request<B>) -> Self::Future {
         let config = Arc::clone(&self.config);
-        Box::pin(
-            async move {
-                let method = request.method();
-                let path = request.uri().path();
-                let request_id = request
-                    .extensions()
-                    .get::<tower_http::request_id::RequestId>()
-                    .cloned()
-                    .map(RequestId)
-                    .ok_or_else(|| {
-                        ServiceError::missing_request_id(method.to_string(), Some(path.to_owned()))
-                    })?;
-                let user = authenticate_user(&config, request.headers())
-                    .await
-                    .map_err(|err| {
-                        warn!(
-                            details = %err,
-                            %request_id,
-                            "authentication failure"
-                        );
-                        err.into_service_error(Some(path.to_owned()), Some(request_id))
-                    })?;
-                request.extensions_mut().insert(user);
-                Ok(request)
+        async move {
+            let method = request.method();
+            let path = request.uri().path();
+            let request_id = match request
+                .extensions()
+                .get::<tower_http::request_id::RequestId>()
+                .cloned()
+                .map(RequestId)
+            {
+                Some(id) => id,
+                None => {
+                    return Err(ServiceError::missing_request_id(
+                        method.to_string(),
+                        Some(path.to_owned()),
+                    ));
+                }
+            };
+            let headers = request.headers();
+            let user = async {
+                let token = bearer_token(headers)?;
+                lookup_user(&config, token).await.inspect_err(|err| {
+                    warn!(
+                        details = %err,
+                        request_id = %request_id,
+                        "authentication failure"
+                    )
+                })
             }
-            .map_err(ServiceError::into_response),
-        )
+            .await
+            .map_err(|err| err.into_service_error(Some(path.to_owned()), Some(request_id)))?;
+            request.extensions_mut().insert(user);
+            Ok(request)
+        }
+        .map_err(ServiceError::into_response)
+        .boxed()
     }
 }
 
-async fn authenticate_user(
-    config: &Config,
-    headers: &HeaderMap<HeaderValue>,
-) -> Result<User, Error> {
-    let token = extract_bearer_token(headers)?;
+async fn lookup_user(config: &Config, token: String) -> Result<User, Error> {
     let username = jwt::validate(config, token).await?;
-    let user_data_root = config
+    let data_root = match config
         .filesystem
         .allowed_roots
         .value
         .iter()
         .find(|root| root.id == username)
-        .ok_or_else(|| Error::UserNotFound(username.clone()))?;
-    let user = User {
-        name: username,
-        data_root: user_data_root.path.clone(),
+        .map(|root| &root.path)
+    {
+        Some(root) => root,
+        None => return Err(Error::UserNotFound(username)),
     };
-    Ok(user)
+    match user::resolve(username.clone()).await {
+        Ok(identity) => Ok(User {
+            name: username,
+            data_root: data_root.to_owned(),
+            identity,
+        }),
+        Err(err) => {
+            warn!(
+                %username,
+                details = %err,
+                "failed to resolve local identity"
+            );
+            Err(Error::NssLookupFailed(username))
+        }
+    }
 }
 
-fn extract_bearer_token(headers: &HeaderMap) -> Result<String, Error> {
+fn bearer_token(headers: &HeaderMap) -> Result<String, Error> {
     headers
         .get(header::AUTHORIZATION)
         .and_then(|header| header.to_str().ok()?.strip_prefix("Bearer "))
@@ -106,6 +127,7 @@ pub(super) enum Error {
     MissingUsernameClaim(String),
     UserNotFound(String),
     InternalKeyVerification,
+    NssLookupFailed(String),
 }
 
 impl std::fmt::Display for Error {
@@ -125,6 +147,12 @@ impl std::fmt::Display for Error {
                 write!(f, "internal key verification error")
             }
             Error::UserNotFound(user) => write!(f, "user {user} not found"),
+            Error::NssLookupFailed(user) => {
+                write!(
+                    f,
+                    "failed to resolve local Linux identity for user '{user}'"
+                )
+            }
         }
     }
 }
@@ -136,8 +164,16 @@ impl Error {
         request_id: Option<RequestId>,
     ) -> ServiceError {
         let (status, retryable) = match &self {
-            Error::InternalKeyVerification => (StatusCode::SERVICE_UNAVAILABLE, true),
-            _ => (StatusCode::UNAUTHORIZED, false),
+            Error::InternalKeyVerification | Error::NssLookupFailed(_) => {
+                (StatusCode::SERVICE_UNAVAILABLE, true)
+            }
+            Error::MissingOrInvalidHeader
+            | Error::DecodeJwtHeader(_)
+            | Error::InvalidToken(_)
+            | Error::MissingKidClaim
+            | Error::KidNotFound(_)
+            | Error::MissingUsernameClaim(_)
+            | Error::UserNotFound(_) => (StatusCode::UNAUTHORIZED, false),
         };
 
         ServiceError {
@@ -157,21 +193,9 @@ impl Error {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct User {
-    name: String,
-    data_root: PathBuf,
-}
-
-impl User {
-    pub(crate) fn data_root(&self) -> &Path {
-        &self.data_root
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{Error, extract_bearer_token};
+    use super::{Error, bearer_token};
     use axum::http::{HeaderMap, StatusCode, header};
 
     // ── extract_bearer_token ──────────────────────────────────────────────────
@@ -179,28 +203,40 @@ mod tests {
     #[test]
     fn extract_bearer_token_missing_header_returns_error() {
         let headers = HeaderMap::new();
-        assert!(matches!(extract_bearer_token(&headers), Err(Error::MissingOrInvalidHeader)));
+        assert!(matches!(
+            bearer_token(&headers),
+            Err(Error::MissingOrInvalidHeader)
+        ));
     }
 
     #[test]
     fn extract_bearer_token_non_bearer_scheme_returns_error() {
         let mut headers = HeaderMap::new();
         headers.insert(header::AUTHORIZATION, "Basic dXNlcjpwYXNz".parse().unwrap());
-        assert!(matches!(extract_bearer_token(&headers), Err(Error::MissingOrInvalidHeader)));
+        assert!(matches!(
+            bearer_token(&headers),
+            Err(Error::MissingOrInvalidHeader)
+        ));
     }
 
     #[test]
     fn extract_bearer_token_missing_space_after_bearer_returns_error() {
         let mut headers = HeaderMap::new();
         headers.insert(header::AUTHORIZATION, "Bearertoken".parse().unwrap());
-        assert!(matches!(extract_bearer_token(&headers), Err(Error::MissingOrInvalidHeader)));
+        assert!(matches!(
+            bearer_token(&headers),
+            Err(Error::MissingOrInvalidHeader)
+        ));
     }
 
     #[test]
     fn extract_bearer_token_lowercase_bearer_is_rejected() {
         let mut headers = HeaderMap::new();
         headers.insert(header::AUTHORIZATION, "bearer some-token".parse().unwrap());
-        assert!(matches!(extract_bearer_token(&headers), Err(Error::MissingOrInvalidHeader)));
+        assert!(matches!(
+            bearer_token(&headers),
+            Err(Error::MissingOrInvalidHeader)
+        ));
     }
 
     #[test]
@@ -211,7 +247,7 @@ mod tests {
             header::AUTHORIZATION,
             format!("Bearer {token}").parse().unwrap(),
         );
-        assert_eq!(extract_bearer_token(&headers).unwrap(), token);
+        assert_eq!(bearer_token(&headers).unwrap(), token);
     }
 
     // ── Error Display ─────────────────────────────────────────────────────────
@@ -255,17 +291,25 @@ mod tests {
             Error::UserNotFound("alice".to_string()).to_string(),
             "user alice not found",
         );
+        assert_eq!(
+            Error::NssLookupFailed("alice".to_string()).to_string(),
+            "failed to resolve local Linux identity for user 'alice'",
+        );
     }
 
     // ── Error::into_service_error ─────────────────────────────────────────────
 
     #[test]
-    fn into_service_error_internal_key_verification_is_503_and_retryable() {
-        let service_error =
-            Error::InternalKeyVerification.into_service_error(Some("/test".to_string()), None);
-        assert_eq!(service_error.status, StatusCode::SERVICE_UNAVAILABLE);
-        assert!(service_error.retryable);
-        assert_eq!(service_error.operation, "authentication");
+    fn into_service_error_internal_errors_are_503_and_retryable() {
+        for service_error in [
+            Error::InternalKeyVerification.into_service_error(Some("/test".to_string()), None),
+            Error::NssLookupFailed("alice".to_string())
+                .into_service_error(Some("/test".to_string()), None),
+        ] {
+            assert_eq!(service_error.status, StatusCode::SERVICE_UNAVAILABLE);
+            assert!(service_error.retryable);
+            assert_eq!(service_error.operation, "authentication");
+        }
     }
 
     #[test]
@@ -281,7 +325,9 @@ mod tests {
         }
 
         assert_401_not_retryable!(Error::MissingOrInvalidHeader);
-        assert_401_not_retryable!(Error::DecodeJwtHeader(JwtError::from(ErrorKind::InvalidToken)));
+        assert_401_not_retryable!(Error::DecodeJwtHeader(JwtError::from(
+            ErrorKind::InvalidToken
+        )));
         assert_401_not_retryable!(Error::InvalidToken(JwtError::from(ErrorKind::InvalidToken)));
         assert_401_not_retryable!(Error::MissingKidClaim);
         assert_401_not_retryable!(Error::KidNotFound("k".into()));

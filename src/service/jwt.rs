@@ -122,6 +122,7 @@ pub(super) async fn validate(config: &Config, token: String) -> Result<String, E
     };
 
     let mut validation = Validation::new(algorithm);
+    validation.validate_nbf = true;
 
     if let Some(issuer) = &jwt_config.issuer.value {
         validation.set_issuer(&[issuer.as_str()]);
