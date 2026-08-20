@@ -110,7 +110,6 @@ pub(super) enum Error {
     MissingKidClaim,
     KidNotFound(String),
     MissingUsernameClaim(String),
-    UserNotFound(String),
     InternalKeyVerification,
     NssLookupFailed(String),
 }
@@ -131,7 +130,6 @@ impl std::fmt::Display for Error {
             Error::InternalKeyVerification => {
                 write!(f, "internal key verification error")
             }
-            Error::UserNotFound(user) => write!(f, "user {user} not found"),
             Error::NssLookupFailed(user) => {
                 write!(
                     f,
@@ -157,8 +155,7 @@ impl Error {
             | Error::InvalidToken(_)
             | Error::MissingKidClaim
             | Error::KidNotFound(_)
-            | Error::MissingUsernameClaim(_)
-            | Error::UserNotFound(_) => (StatusCode::UNAUTHORIZED, false),
+            | Error::MissingUsernameClaim(_) => (StatusCode::UNAUTHORIZED, false),
         };
 
         ServiceError {
@@ -273,10 +270,6 @@ mod tests {
             "internal key verification error",
         );
         assert_eq!(
-            Error::UserNotFound("alice".to_string()).to_string(),
-            "user alice not found",
-        );
-        assert_eq!(
             Error::NssLookupFailed("alice".to_string()).to_string(),
             "failed to resolve local Linux identity for user 'alice'",
         );
@@ -317,7 +310,6 @@ mod tests {
         assert_401_not_retryable!(Error::MissingKidClaim);
         assert_401_not_retryable!(Error::KidNotFound("k".into()));
         assert_401_not_retryable!(Error::MissingUsernameClaim("sub".into()));
-        assert_401_not_retryable!(Error::UserNotFound("alice".into()));
     }
 
     #[test]
