@@ -1,9 +1,5 @@
-use super::{jwt, user};
-use crate::{
-    BoxFuture,
-    config::Config,
-    service::{Error as ServiceError, RequestId},
-};
+use super::{Error as ServiceError, User, jwt, user};
+use crate::{BoxFuture, config::Config};
 use axum::{
     body::Body,
     http::{self, HeaderMap, Response, StatusCode, header},
@@ -11,9 +7,8 @@ use axum::{
 };
 use futures::{FutureExt, TryFutureExt};
 use std::sync::Arc;
-use tower_http::auth::AsyncAuthorizeRequest;
+use tower_http::{auth::AsyncAuthorizeRequest, request_id::RequestId};
 use tracing::warn;
-pub(crate) use user::User;
 
 /// An authenticator for HTTP requests.
 ///
@@ -44,12 +39,7 @@ where
         async move {
             let method = request.method();
             let path = request.uri().path();
-            let request_id = match request
-                .extensions()
-                .get::<tower_http::request_id::RequestId>()
-                .cloned()
-                .map(RequestId)
-            {
+            let request_id = match request.extensions().get::<RequestId>().cloned() {
                 Some(id) => id,
                 None => {
                     return Err(ServiceError::missing_request_id(
@@ -64,7 +54,7 @@ where
                 lookup_user(&config, token).await.inspect_err(|err| {
                     warn!(
                         details = %err,
-                        request_id = %request_id,
+                        ?request_id,
                         "authentication failure"
                     )
                 })
@@ -102,42 +92,31 @@ fn bearer_token(headers: &HeaderMap) -> Result<String, Error> {
         .ok_or(Error::MissingOrInvalidHeader)
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub(super) enum Error {
+    #[error("missing or invalid \"Authorization\" header")]
     MissingOrInvalidHeader,
-    DecodeJwtHeader(jsonwebtoken::errors::Error),
-    InvalidToken(jsonwebtoken::errors::Error),
-    MissingKidClaim,
-    KidNotFound(String),
-    MissingUsernameClaim(String),
-    InternalKeyVerification,
-    NssLookupFailed(String),
-}
 
-impl std::fmt::Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Error::MissingOrInvalidHeader => {
-                f.write_str("missing or invalid \"Authorization\" header")
-            }
-            Error::DecodeJwtHeader(e) => write!(f, "failed to decode JWT header: {e}"),
-            Error::InvalidToken(e) => write!(f, "invalid token: {e}"),
-            Error::MissingKidClaim => f.write_str("JWT missing \"kid\" claim, required for JWKS"),
-            Error::KidNotFound(kid) => write!(f, "JWT \"kid\" '{kid}' not found in JWKS"),
-            Error::MissingUsernameClaim(claim) => {
-                write!(f, "JWT missing configured username claim '{claim}'")
-            }
-            Error::InternalKeyVerification => {
-                write!(f, "internal key verification error")
-            }
-            Error::NssLookupFailed(user) => {
-                write!(
-                    f,
-                    "failed to resolve local Linux identity for user '{user}'"
-                )
-            }
-        }
-    }
+    #[error("failed to decode JWT header: {0}")]
+    DecodeJwtHeader(jsonwebtoken::errors::Error),
+
+    #[error("invalid token: {0}")]
+    InvalidToken(jsonwebtoken::errors::Error),
+
+    #[error("JWT missing \"kid\" claim, required for JWKS")]
+    MissingKidClaim,
+
+    #[error("JWT \"kid\" '{0}' not found in JWKS")]
+    KidNotFound(String),
+
+    #[error("JWT missing configured username claim '{0}'")]
+    MissingUsernameClaim(String),
+
+    #[error("internal key verification error")]
+    InternalKeyVerification,
+
+    #[error("failed to resolve local Linux identity for user '{0}'")]
+    NssLookupFailed(String),
 }
 
 impl Error {

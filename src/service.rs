@@ -1,5 +1,6 @@
+pub(crate) use self::{error::Error, user::User};
 use crate::config::Config;
-use auth::{Authenticator, User};
+use auth::Authenticator;
 use axum::{
     Extension, Json, Router,
     body::Body,
@@ -9,9 +10,7 @@ use axum::{
     routing::get,
 };
 use bytes::Bytes;
-pub(crate) use error::Error;
 use eyre::Result;
-use serde::Serialize;
 use serde_json::{Value, json};
 use std::sync::Arc;
 use std::time::Duration;
@@ -21,7 +20,7 @@ use tower_http::{
     auth::AsyncRequireAuthorizationLayer,
     decompression::RequestDecompressionLayer,
     on_early_drop::{EarlyDropsAsFailures, OnEarlyDropLayer},
-    request_id::MakeRequestUuid,
+    request_id::{MakeRequestUuid, RequestId},
     trace::{DefaultMakeSpan, DefaultOnFailure, DefaultOnResponse, TraceLayer},
 };
 
@@ -162,26 +161,4 @@ pub(crate) fn meta_services() -> Router {
     Router::new()
         .route("/healthz", get(health))
         .route("/readyz", get(ready::run_checks))
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct RequestId(tower_http::request_id::RequestId);
-
-impl std::fmt::Display for RequestId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        String::from_utf8_lossy(self.0.header_value().as_bytes()).fmt(f)
-    }
-}
-
-impl Serialize for RequestId {
-    fn serialize<S>(&self, serializer: S) -> std::prelude::v1::Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        let value = self.0.header_value();
-        match value.to_str() {
-            Ok(id) => id.serialize(serializer),
-            Err(_) => value.as_bytes().serialize(serializer),
-        }
-    }
 }

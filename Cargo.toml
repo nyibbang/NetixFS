@@ -14,7 +14,7 @@ eyre = "0.6.12"
 futures = "0.3.32"
 humantime = "2.3.0"
 humantime-serde = "1.1.1"
-jsonwebtoken = { version = "10.4.0", features = ["rust_crypto"] }
+jsonwebtoken = { version = "11.0.0", features = ["rust_crypto"] }
 lazy_static = "1.5.0"
 reqwest = "0.13.4"
 serde = { version = "1.0.228", features = ["derive", "rc"] }
@@ -33,7 +33,22 @@ tokio-util = "0.7.18"
 toml = "1.1.2"
 uzers = "0.12"
 tower = "0.5.3"
-tower-http = { version = "0.6.11", features = ["auth", "compression-br", "cors", "decompression-br", "limit", "normalize-path", "on-early-drop", "request-id", "sensitive-headers", "set-header", "timeout", "trace", "tracing", "util"] }
+tower-http = { version = "0.7.0", features = [
+  "auth",
+  "compression-br",
+  "cors",
+  "decompression-br",
+  "limit",
+  "normalize-path",
+  "on-early-drop",
+  "request-id",
+  "sensitive-headers",
+  "set-header",
+  "timeout",
+  "trace",
+  "tracing",
+  "util",
+] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["json"] }
 url = { version = "2.5.8", features = ["serde"] }
