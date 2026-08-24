@@ -20,7 +20,7 @@ use tower_http::{
     auth::AsyncRequireAuthorizationLayer,
     decompression::RequestDecompressionLayer,
     on_early_drop::{EarlyDropsAsFailures, OnEarlyDropLayer},
-    request_id::{MakeRequestUuid, RequestId},
+    request_id::MakeRequestUuid,
     trace::{DefaultMakeSpan, DefaultOnFailure, DefaultOnResponse, TraceLayer},
 };
 
