@@ -1,4 +1,4 @@
-pub(crate) use self::{error::Error, user::User};
+pub(crate) use self::{error::ErrorResponse, user::User};
 use crate::config::Config;
 use auth::Authenticator;
 use axum::{

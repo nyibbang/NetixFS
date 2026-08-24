@@ -9,7 +9,7 @@ use tower_http::request_id::RequestId;
 
 #[serde_as]
 #[derive(Debug, Clone, Serialize)]
-pub(crate) struct Error {
+pub(crate) struct ErrorResponse {
     // Machine-readable error code
     pub(crate) code: String,
 
@@ -37,7 +37,7 @@ pub(crate) struct Error {
     pub(crate) request_id: Option<RequestId>,
 }
 
-impl Error {
+impl ErrorResponse {
     pub(crate) fn missing_request_id(operation: String, path: Option<String>) -> Self {
         Self {
             code: "missing_request_id".to_owned(),
@@ -52,7 +52,7 @@ impl Error {
     }
 }
 
-impl IntoResponse for Error {
+impl IntoResponse for ErrorResponse {
     fn into_response(self) -> Response {
         (self.status, Json(self)).into_response()
     }

@@ -1,4 +1,4 @@
-use super::{Error as ServiceError, User, jwt, user};
+use super::{ErrorResponse as ServiceError, User, jwt, user};
 use crate::{BoxFuture, config::Config};
 use axum::{
     body::Body,
