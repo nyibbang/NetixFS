@@ -27,6 +27,7 @@ use tower_http::{
 mod auth;
 mod error;
 mod jwt;
+mod params;
 mod ready;
 mod user;
 
