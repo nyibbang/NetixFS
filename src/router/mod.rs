@@ -2,15 +2,11 @@ pub(crate) use self::{error::ErrorResponse, user::User};
 use crate::config::Config;
 use auth::Authenticator;
 use axum::{
-    Extension, Json, Router,
-    body::Body,
-    extract::Path as RequestPath,
-    http::{HeaderValue, StatusCode, header},
-    response::{IntoResponse, Response},
+    Json, Router,
+    http::{HeaderValue, header},
     routing::get,
 };
 use bytes::Bytes;
-use eyre::Result;
 use serde_json::{Value, json};
 use std::sync::Arc;
 use std::time::Duration;
@@ -25,6 +21,7 @@ use tower_http::{
 };
 
 mod auth;
+mod endpoints;
 mod error;
 mod jwt;
 mod params;
@@ -33,80 +30,6 @@ mod user;
 
 async fn health() -> Json<Value> {
     Json(json!({ "status": "ok" }))
-}
-
-// fn sanitize_path(user_data_root: &Path, file_path: String) -> Result<PathBuf, StatusCode> {
-//     let file_path = user_data_root
-//         .join(&file_path)
-//         .canonicalize()
-//         .map_err(|_| StatusCode::NOT_FOUND)?;
-//     if !file_path.starts_with(user_data_root) {
-//         return Err(StatusCode::FORBIDDEN);
-//     }
-//     Ok(file_path)
-// }
-
-async fn read_file(
-    Extension(_user): Extension<User>,
-    RequestPath(_file_path): RequestPath<String>,
-) -> Result<Response, StatusCode> {
-    // let user_file_path = sanitize_path(user.data_root(), file_path)?;
-    // if !user_file_path.exists() {
-    //     return Err(StatusCode::NOT_FOUND);
-    // }
-    // let file = File::open(&user_file_path)
-    //     .await
-    //     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    // let file_stream = ReaderStream::new(file);
-    // Ok(Body::from_stream(file_stream).into_response())
-    Ok(Body::empty().into_response())
-}
-
-async fn write_file(
-    Extension(_user): Extension<User>,
-    RequestPath(_file_path): RequestPath<String>,
-    _content: Bytes,
-) -> Result<Response, StatusCode> {
-    // let path = get_path(&request);
-    // let token = authentication_token(request.headers()).ok_or(StatusCode::UNAUTHORIZED)?;
-    //
-    // let bytes = axum::body::to_bytes(request.body(), 1024 * 1024 * 10)
-    //     .await
-    //     .map_err(|_| StatusCode::PAYLOAD_TOO_LARGE)?;
-    //
-    // let user_dir = get_user_dir(&state.root_path, &token);
-    // let file_path = user_dir.join(path);
-    //
-    // fs::create_dir_all(&user_dir)
-    //     .await
-    //     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    //
-    // fs::write(&file_path, &bytes)
-    //     .await
-    //     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    //
-    Ok(StatusCode::CREATED.into_response())
-}
-
-async fn delete_file(
-    Extension(_user): Extension<User>,
-    RequestPath(_file_path): RequestPath<String>,
-) -> Result<Response, StatusCode> {
-    // let path = get_path(&request);
-    // let token = authentication_token(request.headers()).ok_or(StatusCode::UNAUTHORIZED)?;
-    //
-    // let user_dir = get_user_dir(&state.root_path, &token);
-    // let file_path = user_dir.join(path);
-    //
-    // if !file_path.exists() {
-    //     return Err(StatusCode::NOT_FOUND);
-    // }
-    //
-    // fs::remove_file(&file_path)
-    //     .await
-    //     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    //
-    Ok(StatusCode::NO_CONTENT.into_response())
 }
 
 pub(crate) fn service(config: Arc<Config>) -> Router {
@@ -150,11 +73,8 @@ pub(crate) fn service(config: Arc<Config>) -> Router {
         );
 
     Router::new()
+        .nest("/api/v1", endpoints::service())
         .layer(generic_middleware)
-        .route(
-            "/{*path}",
-            get(read_file).post(write_file).delete(delete_file),
-        )
         .route_layer(middleware)
 }
 
