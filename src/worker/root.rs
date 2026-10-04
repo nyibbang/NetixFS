@@ -1,19 +1,10 @@
-use crate::{Config, config::SymlinkPolicy, path::RelativePath};
+use super::Config;
+use crate::{config::SymlinkPolicy, path::RelativePath};
 use rustix::{
     fs::{Mode, OFlags, ResolveFlags, open, openat2},
     io::Errno,
 };
 use std::os::fd::OwnedFd;
-
-#[derive(Debug, PartialEq, Eq, thiserror::Error)]
-pub enum ContainmentError {
-    #[error("path resolves outside of the root")]
-    OutsideRoot,
-    #[error("symbolic links are not allowed")]
-    SymlinkRejected,
-    #[error("filesystem error: {0}")]
-    Os(Errno),
-}
 
 #[derive(Debug)]
 pub struct Root {
@@ -33,13 +24,10 @@ impl Root {
         config: &Config,
     ) -> Result<OwnedFd, ContainmentError> {
         let mut resolve = ResolveFlags::BENEATH | ResolveFlags::NO_MAGICLINKS;
-        if !config.filesystem.allow_mount_crossing.value {
+        if !config.allow_mount_crossing {
             resolve |= ResolveFlags::NO_XDEV;
         }
-        if matches!(
-            config.filesystem.symlink_policy.value,
-            SymlinkPolicy::Reject
-        ) {
+        if config.symlink_policy == SymlinkPolicy::Reject {
             resolve |= ResolveFlags::NO_SYMLINKS;
         }
         openat2(
@@ -49,20 +37,28 @@ impl Root {
             Mode::empty(),
             resolve,
         )
-        .map_err(
-            |errno| match (errno, &config.filesystem.symlink_policy.value) {
-                (Errno::XDEV, _) => ContainmentError::OutsideRoot,
-                (Errno::LOOP, SymlinkPolicy::Reject) => ContainmentError::SymlinkRejected,
-                (errno, _) => ContainmentError::Os(errno),
-            },
-        )
+        .map_err(|errno| match (errno, config.symlink_policy) {
+            (Errno::XDEV, _) => ContainmentError::OutsideRoot,
+            (Errno::LOOP, SymlinkPolicy::Reject) => ContainmentError::SymlinkRejected,
+            (errno, _) => ContainmentError::Os(errno),
+        })
     }
+}
+
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+pub enum ContainmentError {
+    #[error("path resolves outside of the root")]
+    OutsideRoot,
+    #[error("symbolic links are not allowed")]
+    SymlinkRejected,
+    #[error("filesystem error: {0}")]
+    Os(Errno),
 }
 
 #[cfg(test)]
 mod tests {
     use super::{ContainmentError, Root};
-    use crate::{Config, config, path::RelativePath};
+    use crate::{config, path::RelativePath, worker::Config};
     use assert_matches::assert_matches;
     use rustix::io::Errno;
     use std::{
@@ -88,7 +84,7 @@ mod tests {
     }
 
     fn config(symlink_policy: &str) -> Config {
-        config::load([
+        let app_config = config::load([
             "netixfs",
             "--allowed-root",
             "root=/unused",
@@ -97,7 +93,8 @@ mod tests {
             "--symlink-policy",
             symlink_policy,
         ])
-        .unwrap()
+        .unwrap();
+        Config::from(&app_config)
     }
 
     fn read_to_string(fd: OwnedFd) -> String {
