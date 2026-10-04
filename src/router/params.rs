@@ -1,10 +1,13 @@
 use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
-use relative_path::{RelativePath, RelativePathBuf};
 use serde::de::Error;
-use std::{ffi::OsStr, os::unix::ffi::OsStrExt};
+use std::{
+    ffi::OsStr,
+    os::unix::ffi::OsStrExt,
+    path::{Component, PathBuf},
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(super) struct Path(RelativePathBuf);
+pub(super) struct Path(PathBuf);
 
 impl<'de> serde::Deserialize<'de> for Path {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
@@ -13,65 +16,61 @@ impl<'de> serde::Deserialize<'de> for Path {
     {
         #[derive(serde::Deserialize)]
         struct RawOrBase64<'a> {
-            path: Option<&'a std::path::Path>,
+            #[serde(borrow)]
+            path: Option<&'a str>,
 
             #[serde(borrow)]
             path_b64: Option<&'a str>,
         }
         let RawOrBase64 { path, path_b64 } = RawOrBase64::deserialize(deserializer)?;
-        let path = match (path, path_b64) {
-            (Some(path), None) => RelativePathBuf::from_path(path).map_err(|from_path_err| {
-                D::Error::custom(format!(
-                    "could not build a path from path value: {from_path_err}",
-                ))
-            }),
+        let raw = match (path, path_b64) {
+            (Some(path), None) => path.as_bytes().to_vec(),
             (None, Some(path_b64)) => {
-                let path_as_bytes =
-                    BASE64_URL_SAFE_NO_PAD
-                        .decode(path_b64.as_bytes())
-                        .map_err(|decode_error| {
-                            D::Error::custom(format!(
-                                "could not decode path_b64 value: {decode_error}"
-                            ))
-                        })?;
-                let path_as_os_str = OsStr::from_bytes(&path_as_bytes);
-                RelativePathBuf::from_path(path_as_os_str).map_err(|from_path_err| {
-                    D::Error::custom(format!(
-                        "could not build a path from base64 bytes {from_path_err}",
-                    ))
-                })
+                BASE64_URL_SAFE_NO_PAD
+                    .decode(path_b64.as_bytes())
+                    .map_err(|decode_error| {
+                        D::Error::custom(format!("could not decode path_b64 value: {decode_error}"))
+                    })?
             }
             (None, None) => return Err(D::Error::custom("neither path or path_b64 are present")),
             (Some(_), Some(_)) => {
                 return Err(D::Error::custom("both path and path_b64 are present"));
             }
-        }?;
-        sanitize(&path).map_err(D::Error::custom)?;
+        };
+        let raw_path = std::path::Path::new(OsStr::from_bytes(&raw));
+        let path = normalize_sanitize(raw_path).map_err(D::Error::custom)?;
         Ok(Self(path))
     }
 }
 
-fn sanitize(path: &RelativePath) -> Result<(), String> {
-    if path.components().count() == 0 {
+fn normalize_sanitize(path: &std::path::Path) -> Result<PathBuf, String> {
+    if path.as_os_str().as_bytes().contains(&0) {
+        return Err("path must not contain NUL bytes".to_string());
+    }
+    let mut normalized_sanitized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Normal(name) => normalized_sanitized.push(name),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                return Err("path must not contain ancestor components".to_string());
+            }
+            Component::RootDir | Component::Prefix(_) => {
+                return Err("path must be relative".to_string());
+            }
+        }
+    }
+    if normalized_sanitized.as_os_str().is_empty() {
         return Err("path must not be empty".to_string());
     }
-    if path.as_str().starts_with('/') {
-        return Err("path must be relative".to_string());
-    }
-    if path
-        .components()
-        .any(|c| c == relative_path::Component::ParentDir)
-    {
-        return Err("path must not contain ancestor components".to_string());
-    }
-    Ok(())
+    Ok(normalized_sanitized)
 }
 
 #[cfg(test)]
 mod tests {
     use super::Path;
     use assert_matches::assert_matches;
-    use relative_path::RelativePathBuf;
+    use std::{ffi::OsStr, os::unix::ffi::OsStrExt, path::PathBuf};
 
     fn deserialize(json: &str) -> Result<Path, serde_json::Error> {
         serde_json::from_str(json)
@@ -81,7 +80,7 @@ mod tests {
     fn raw_path_is_accepted() {
         assert_eq!(
             deserialize(r#"{"path": "docs/readme.txt"}"#).unwrap(),
-            Path(RelativePathBuf::from("docs/readme.txt"))
+            Path(PathBuf::from("docs/readme.txt"))
         );
     }
 
@@ -89,7 +88,7 @@ mod tests {
     fn raw_path_that_is_absolute_is_rejected() {
         assert_matches!(
             deserialize(r#"{"path": "/etc/passwd"}"#),
-            Err(error) if error.to_string().contains("could not build a path from path value")
+            Err(error) if error.to_string().contains("path must be relative")
         );
     }
 
@@ -120,27 +119,27 @@ mod tests {
     #[test]
     fn base64_path_is_accepted() {
         assert_eq!(
-            deserialize(r#"{"path_b64": "ZG9jcy9yZWFkbWUudHh0"}"#).unwrap(),
-            Path(RelativePathBuf::from("docs/readme.txt"))
+            deserialize(r#"{"path_b64": "ZG9jcy9yZWFkbWUudHh0"}"#).unwrap(), // "docs/readme.txt"
+            Path(PathBuf::from("docs/readme.txt"))
         );
     }
 
     #[test]
     fn base64_path_with_non_ascii_utf8_is_accepted() {
         assert_eq!(
-            deserialize(r#"{"path_b64": "ZGlyL2NhZsOpIPCfk4E"}"#).unwrap(),
-            Path(RelativePathBuf::from("dir/café 📁"))
+            deserialize(r#"{"path_b64": "ZGlyL2NhZsOpIPCfk4E"}"#).unwrap(), // "dir/café 📁"
+            Path(PathBuf::from("dir/café 📁"))
         );
     }
 
     #[test]
     fn base64_path_uses_url_safe_alphabet() {
         assert_eq!(
-            deserialize(r#"{"path_b64": "YT8-"}"#).unwrap(),
-            Path(RelativePathBuf::from("a?>"))
+            deserialize(r#"{"path_b64": "YT8-"}"#).unwrap(), // "a?>"
+            Path(PathBuf::from("a?>"))
         );
         assert_matches!(
-            deserialize(r#"{"path_b64": "YT8+"}"#),
+            deserialize(r#"{"path_b64": "YT8+"}"#), // "a?>" with the standard alphabet, not URL-safe
             Err(error) if error.to_string().contains("could not decode path_b64 value")
         );
     }
@@ -148,7 +147,7 @@ mod tests {
     #[test]
     fn base64_path_with_padding_is_rejected() {
         assert_matches!(
-            deserialize(r#"{"path_b64": "Zg=="}"#),
+            deserialize(r#"{"path_b64": "Zg=="}"#), // "f"
             Err(error) if error.to_string().contains("could not decode path_b64 value")
         );
     }
@@ -156,30 +155,31 @@ mod tests {
     #[test]
     fn base64_path_with_invalid_characters_is_rejected() {
         assert_matches!(
-            deserialize(r#"{"path_b64": "not base64!"}"#),
+            deserialize(r#"{"path_b64": "not base64!"}"#), // contains spaces and "!", no decoding
             Err(error) if error.to_string().contains("could not decode path_b64 value")
         );
     }
 
     #[test]
-    fn base64_path_that_is_not_utf8_is_rejected() {
-        assert_matches!(
-            deserialize(r#"{"path_b64": "__4"}"#),
-            Err(error) if error.to_string().contains("could not build a path from base64 bytes")
+    fn base64_path_that_is_not_utf8_is_accepted() {
+        assert_eq!(
+            deserialize(r#"{"path_b64": "__4"}"#).unwrap(), // bytes FF FE, not UTF-8
+            Path(PathBuf::from(OsStr::from_bytes(&[0xFF, 0xFE])))
         );
     }
 
     #[test]
     fn base64_path_that_is_absolute_is_rejected() {
         assert_matches!(
-            deserialize(r#"{"path_b64": "L2V0Yy9wYXNzd2Q"}"#),
-            Err(error) if error.to_string().contains("could not build a path from base64 bytes")
+            deserialize(r#"{"path_b64": "L2V0Yy9wYXNzd2Q"}"#), // "/etc/passwd"
+            Err(error) if error.to_string().contains("path must be relative")
         );
     }
+
     #[test]
     fn base64_path_containing_ancestors_is_rejected() {
         assert_matches!(
-            deserialize(r#"{"path_b64": "Zm9vLy4uL2Jhcg"}"#),
+            deserialize(r#"{"path_b64": "Zm9vLy4uL2Jhcg"}"#), // "foo/../bar"
             Err(error) if error.to_string().contains("path must not contain ancestor components")
         );
     }
@@ -187,7 +187,7 @@ mod tests {
     #[test]
     fn empty_base64_path_is_rejected() {
         assert_matches!(
-            deserialize(r#"{"path_b64": ""}"#),
+            deserialize(r#"{"path_b64": ""}"#), // ""
             Err(error) if error.to_string().contains("path must not be empty")
         );
     }
@@ -211,8 +211,32 @@ mod tests {
     #[test]
     fn both_path_and_path_b64_is_rejected() {
         assert_matches!(
-            deserialize(r#"{"path": "docs", "path_b64": "ZG9jcw"}"#),
+            deserialize(r#"{"path": "docs", "path_b64": "ZG9jcw"}"#), // "docs"
             Err(error) if error.to_string().contains("both path and path_b64 are present")
+        );
+    }
+
+    #[test]
+    fn raw_path_is_normalized() {
+        assert_eq!(
+            deserialize(r#"{"path": "./docs//readme.txt"}"#).unwrap(),
+            Path(PathBuf::from("docs/readme.txt"))
+        );
+    }
+
+    #[test]
+    fn path_reducing_to_nothing_is_rejected() {
+        assert_matches!(
+            deserialize(r#"{"path": "./"}"#),
+            Err(error) if error.to_string().contains("path must not be empty")
+        );
+    }
+
+    #[test]
+    fn base64_path_containing_nul_is_rejected() {
+        assert_matches!(
+            deserialize(r#"{"path_b64": "YQBi"}"#), // "a\0b"
+            Err(error) if error.to_string().contains("path must not contain NUL bytes")
         );
     }
 }
