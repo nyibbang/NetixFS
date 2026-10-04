@@ -7,9 +7,16 @@ use std::{
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(super) struct Path(PathBuf);
+pub struct RelativePath(PathBuf);
 
-impl<'de> serde::Deserialize<'de> for Path {
+impl RelativePath {
+    #[must_use]
+    pub fn as_path(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for RelativePath {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
@@ -68,11 +75,11 @@ fn normalize_sanitize(path: &std::path::Path) -> Result<PathBuf, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::Path;
+    use super::RelativePath;
     use assert_matches::assert_matches;
     use std::{ffi::OsStr, os::unix::ffi::OsStrExt, path::PathBuf};
 
-    fn deserialize(json: &str) -> Result<Path, serde_json::Error> {
+    fn deserialize(json: &str) -> Result<RelativePath, serde_json::Error> {
         serde_json::from_str(json)
     }
 
@@ -80,7 +87,7 @@ mod tests {
     fn raw_path_is_accepted() {
         assert_eq!(
             deserialize(r#"{"path": "docs/readme.txt"}"#).unwrap(),
-            Path(PathBuf::from("docs/readme.txt"))
+            RelativePath(PathBuf::from("docs/readme.txt"))
         );
     }
 
@@ -120,7 +127,7 @@ mod tests {
     fn base64_path_is_accepted() {
         assert_eq!(
             deserialize(r#"{"path_b64": "ZG9jcy9yZWFkbWUudHh0"}"#).unwrap(), // "docs/readme.txt"
-            Path(PathBuf::from("docs/readme.txt"))
+            RelativePath(PathBuf::from("docs/readme.txt"))
         );
     }
 
@@ -128,7 +135,7 @@ mod tests {
     fn base64_path_with_non_ascii_utf8_is_accepted() {
         assert_eq!(
             deserialize(r#"{"path_b64": "ZGlyL2NhZsOpIPCfk4E"}"#).unwrap(), // "dir/café 📁"
-            Path(PathBuf::from("dir/café 📁"))
+            RelativePath(PathBuf::from("dir/café 📁"))
         );
     }
 
@@ -136,7 +143,7 @@ mod tests {
     fn base64_path_uses_url_safe_alphabet() {
         assert_eq!(
             deserialize(r#"{"path_b64": "YT8-"}"#).unwrap(), // "a?>"
-            Path(PathBuf::from("a?>"))
+            RelativePath(PathBuf::from("a?>"))
         );
         assert_matches!(
             deserialize(r#"{"path_b64": "YT8+"}"#), // "a?>" with the standard alphabet, not URL-safe
@@ -164,7 +171,7 @@ mod tests {
     fn base64_path_that_is_not_utf8_is_accepted() {
         assert_eq!(
             deserialize(r#"{"path_b64": "__4"}"#).unwrap(), // bytes FF FE, not UTF-8
-            Path(PathBuf::from(OsStr::from_bytes(&[0xFF, 0xFE])))
+            RelativePath(PathBuf::from(OsStr::from_bytes(&[0xFF, 0xFE])))
         );
     }
 
@@ -220,7 +227,7 @@ mod tests {
     fn raw_path_is_normalized() {
         assert_eq!(
             deserialize(r#"{"path": "./docs//readme.txt"}"#).unwrap(),
-            Path(PathBuf::from("docs/readme.txt"))
+            RelativePath(PathBuf::from("docs/readme.txt"))
         );
     }
 

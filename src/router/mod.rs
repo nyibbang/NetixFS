@@ -24,7 +24,6 @@ mod auth;
 mod endpoints;
 mod error;
 mod jwt;
-mod params;
 mod ready;
 mod user;
 

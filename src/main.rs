@@ -7,7 +7,9 @@ use tracing::debug;
 
 mod config;
 mod logging;
+mod path;
 mod router;
+mod worker;
 
 type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send + 'static>>;
 

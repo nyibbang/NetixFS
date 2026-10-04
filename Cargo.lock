@@ -1558,6 +1558,7 @@ dependencies = [
  "humantime-serde",
  "jsonwebtoken",
  "reqwest",
+ "rustix",
  "serde",
  "serde_json",
  "serde_with",

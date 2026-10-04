@@ -16,6 +16,7 @@ humantime = "2.3.0"
 humantime-serde = "1.1.1"
 jsonwebtoken = { version = "11.0.0", features = ["rust_crypto"] }
 reqwest = "0.13.4"
+rustix = { version = "1.1.4", features = ["fs"] }
 serde = { version = "1.0.228", features = ["derive", "rc"] }
 serde_json = "1.0.145"
 serde_with = "3.22.0"
