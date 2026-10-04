@@ -9,7 +9,7 @@ use tower_http::request_id::RequestId;
 
 #[serde_as]
 #[derive(Debug, Clone, Serialize)]
-pub(crate) struct ErrorResponse {
+pub struct ErrorResponse {
     // Machine-readable error code
     pub(crate) code: String,
 
@@ -58,6 +58,10 @@ impl IntoResponse for ErrorResponse {
     }
 }
 
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde serialize_with requires a reference"
+)]
 fn serialize_status_code<S>(code: &StatusCode, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: Serializer,

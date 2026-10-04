@@ -144,7 +144,7 @@ pub(super) async fn validate(config: &Config, token: String) -> Result<String, E
             }
         })
         .ok_or_else(|| Error::MissingUsernameClaim(username_claim.clone()))?;
-    Ok(username.to_owned())
+    Ok(username)
 }
 
 #[cfg(test)]
@@ -228,7 +228,9 @@ mod tests {
     }
 
     fn future_exp() -> u64 {
-        (std::time::SystemTime::now() + std::time::Duration::from_secs(3600))
+        std::time::SystemTime::now()
+            .checked_add(std::time::Duration::from_secs(3600))
+            .unwrap()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs()

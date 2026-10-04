@@ -7,8 +7,8 @@ use clap::{
     value_parser,
 };
 use eyre::{Context, Result, eyre};
-use lazy_static::lazy_static;
 use serde::de::DeserializeOwned;
+use std::sync::LazyLock;
 use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4},
     path::PathBuf,
@@ -18,7 +18,7 @@ use url::Url;
 
 /// Descriptor for a single configuration parameter knob.
 #[derive(Debug, Builder)]
-pub(crate) struct Parameter<T> {
+pub struct Parameter<T> {
     #[builder(start_fn)]
     pub(super) id: &'static str,
 
@@ -143,7 +143,7 @@ impl<T> ValueSeed for Option<T>
 where
     T: DeserializeOwned + Clone + Send + Sync + 'static,
 {
-    type Output = Option<T>;
+    type Output = Self;
 
     fn read_from_args(args: &ArgMatches, id: &str) -> Result<Option<(Self::Output, ValueSource)>> {
         Ok(get_one::<T>(args, id)?.map(|(value, source)| (Some(value), source)))
@@ -166,7 +166,7 @@ impl<T> ValueSeed for Vec<T>
 where
     T: DeserializeOwned + Clone + Send + Sync + 'static,
 {
-    type Output = Vec<T>;
+    type Output = Self;
 
     fn read_from_args(args: &ArgMatches, id: &str) -> Result<Option<(Self::Output, ValueSource)>> {
         get_many::<T, _>(args, id)
@@ -176,7 +176,7 @@ where
         file_config: &toml::Table,
         key: &str,
     ) -> Result<Option<(Self::Output, ValueSource)>> {
-        get_from_file_config::<Vec<T>>(file_config, key)
+        get_from_file_config::<Self>(file_config, key)
     }
 
     fn make_from_default_seed(&self) -> (Self::Output, ValueSource) {
@@ -190,10 +190,7 @@ where
 {
     args.try_get_one::<T>(id)
         .wrap_err_with(|| {
-            format!(
-                "failed to convert configuration argument configuration value for id {:?}",
-                id
-            )
+            format!("failed to convert configuration argument configuration value for id {id:?}")
         })?
         .map(|value| {
             Ok((
@@ -221,10 +218,7 @@ where
         .map(|value| {
             Ok((
                 value.try_into().wrap_err_with(|| {
-                    format!(
-                        "failed to convert file configuration value for key {:?}",
-                        key
-                    )
+                    format!("failed to convert file configuration value for key {key:?}")
                 })?,
                 ValueSource::ConfigFile,
             ))
@@ -277,510 +271,598 @@ impl std::str::FromStr for HumanDuration {
     }
 }
 
-lazy_static! {
-    // ── General ──────────────────────────────────────────────────────────────────────────
-    pub(super) static ref CONFIG_FILE: Parameter<Option<PathBuf>> =
-        Parameter::builder("config_file")
-            .argument("--config-file")
-            .environment("NETIXFS_CONFIG_FILE")
-            .default(None)
-            .arg_value_parser(value_parser!(PathBuf))
-            .build();
+// ── General ──────────────────────────────────────────────────────────────────────────
+pub(super) static CONFIG_FILE: LazyLock<Parameter<Option<PathBuf>>> = LazyLock::new(|| {
+    Parameter::builder("config_file")
+        .argument("--config-file")
+        .environment("NETIXFS_CONFIG_FILE")
+        .default(None)
+        .arg_value_parser(value_parser!(PathBuf))
+        .build()
+});
 
-    // ── Server ───────────────────────────────────────────────────────────────────────────
-    pub(super) static ref SERVER_BIND_ADDRESS: Parameter<Simple<IpAddr>> =
-        Parameter::builder("server.bind_address")
-            .argument("--bind-address")
-            .environment("NETIXFS_SERVER_BIND_ADDRESS")
-            .toml("server.bind_address")
-            .default(IpAddr::V4(Ipv4Addr::LOCALHOST))
-            .arg_value_parser(value_parser!(IpAddr))
-            .build();
-    pub(super) static ref SERVER_PORT: Parameter<Simple<u16>> =
-        Parameter::builder("server.port")
-            .argument("--port")
-            .environment("NETIXFS_SERVER_PORT")
-            .toml("server.port")
-            .default(8080u16)
-            .arg_value_parser(value_parser!(u16))
-            .build();
+// ── Server ───────────────────────────────────────────────────────────────────────────
+pub(super) static SERVER_BIND_ADDRESS: LazyLock<Parameter<Simple<IpAddr>>> = LazyLock::new(|| {
+    Parameter::builder("server.bind_address")
+        .argument("--bind-address")
+        .environment("NETIXFS_SERVER_BIND_ADDRESS")
+        .toml("server.bind_address")
+        .default(IpAddr::V4(Ipv4Addr::LOCALHOST))
+        .arg_value_parser(value_parser!(IpAddr))
+        .build()
+});
+pub(super) static SERVER_PORT: LazyLock<Parameter<Simple<u16>>> = LazyLock::new(|| {
+    Parameter::builder("server.port")
+        .argument("--port")
+        .environment("NETIXFS_SERVER_PORT")
+        .toml("server.port")
+        .default(8080u16)
+        .arg_value_parser(value_parser!(u16))
+        .build()
+});
 
-    pub(super) static ref SERVER_PUBLIC_BASE_URL: Parameter<Option<Url>> =
-        Parameter::builder("server.public_base_url")
-            .argument("--public-base-url")
-            .environment("NETIXFS_SERVER_PUBLIC_BASE_URL")
-            .toml("server.public_base_url")
-            .default(None)
-            .arg_value_parser(value_parser!(Url))
-            .build();
+pub(super) static SERVER_PUBLIC_BASE_URL: LazyLock<Parameter<Option<Url>>> = LazyLock::new(|| {
+    Parameter::builder("server.public_base_url")
+        .argument("--public-base-url")
+        .environment("NETIXFS_SERVER_PUBLIC_BASE_URL")
+        .toml("server.public_base_url")
+        .default(None)
+        .arg_value_parser(value_parser!(Url))
+        .build()
+});
 
-    // ── TLS ─────────────────────────────────────────────────────────────────────────────
-    pub(super) static ref TLS_ENABLED: Parameter<Simple<bool>> =
-        Parameter::builder("tls.enabled")
-            .argument("--tls-enabled")
-            .environment("NETIXFS_TLS_ENABLED")
-            .toml("tls.enabled")
-            .default(false)
-            .arg_value_parser(BoolishValueParser::new())
-            .build();
+// ── TLS ─────────────────────────────────────────────────────────────────────────────
+pub(super) static TLS_ENABLED: LazyLock<Parameter<Simple<bool>>> = LazyLock::new(|| {
+    Parameter::builder("tls.enabled")
+        .argument("--tls-enabled")
+        .environment("NETIXFS_TLS_ENABLED")
+        .toml("tls.enabled")
+        .default(false)
+        .arg_value_parser(BoolishValueParser::new())
+        .build()
+});
 
-    pub(super) static ref TLS_CERT_PATH: Parameter<Option<PathBuf>> =
-        Parameter::builder("tls.cert_path")
-            .argument("--tls-cert-path")
-            .environment("NETIXFS_TLS_CERT_PATH")
-            .toml("tls.cert_path")
-            .default(None)
-            .arg_value_parser(value_parser!(PathBuf))
-            .build();
+pub(super) static TLS_CERT_PATH: LazyLock<Parameter<Option<PathBuf>>> = LazyLock::new(|| {
+    Parameter::builder("tls.cert_path")
+        .argument("--tls-cert-path")
+        .environment("NETIXFS_TLS_CERT_PATH")
+        .toml("tls.cert_path")
+        .default(None)
+        .arg_value_parser(value_parser!(PathBuf))
+        .build()
+});
 
-    pub(super) static ref TLS_KEY_PATH: Parameter<Option<PathBuf>> =
-        Parameter::builder("tls.key_path")
-            .argument("--tls-key-path")
-            .environment("NETIXFS_TLS_KEY_PATH")
-            .toml("tls.key_path")
-            .default(None)
-            .sensitive()
-            .arg_value_parser(value_parser!(PathBuf))
-            .build();
+pub(super) static TLS_KEY_PATH: LazyLock<Parameter<Option<PathBuf>>> = LazyLock::new(|| {
+    Parameter::builder("tls.key_path")
+        .argument("--tls-key-path")
+        .environment("NETIXFS_TLS_KEY_PATH")
+        .toml("tls.key_path")
+        .default(None)
+        .sensitive()
+        .arg_value_parser(value_parser!(PathBuf))
+        .build()
+});
 
-    // ── CORS ─────────────────────────────────────────────────────────────────────────────
-    pub(super) static ref CORS_ENABLED: Parameter<Simple<bool>> =
-        Parameter::builder("cors.enabled")
-            .argument("--cors-enabled")
-            .environment("NETIXFS_CORS_ENABLED")
-            .toml("cors.enabled")
-            .default(false)
-            .arg_value_parser(BoolishValueParser::new())
-            .build();
+// ── CORS ─────────────────────────────────────────────────────────────────────────────
+pub(super) static CORS_ENABLED: LazyLock<Parameter<Simple<bool>>> = LazyLock::new(|| {
+    Parameter::builder("cors.enabled")
+        .argument("--cors-enabled")
+        .environment("NETIXFS_CORS_ENABLED")
+        .toml("cors.enabled")
+        .default(false)
+        .arg_value_parser(BoolishValueParser::new())
+        .build()
+});
 
-    pub(super) static ref CORS_ALLOWED_ORIGINS: Parameter<Vec<String>> =
-        Parameter::builder("cors.allowed_origins")
-            .argument("--cors-allowed-origin")
-            .environment("NETIXFS_CORS_ALLOWED_ORIGINS")
-            .toml("cors.allowed_origins")
-            .default(Vec::new())
-            .arg_value_parser(value_parser!(String))
-            .build();
+pub(super) static CORS_ALLOWED_ORIGINS: LazyLock<Parameter<Vec<String>>> = LazyLock::new(|| {
+    Parameter::builder("cors.allowed_origins")
+        .argument("--cors-allowed-origin")
+        .environment("NETIXFS_CORS_ALLOWED_ORIGINS")
+        .toml("cors.allowed_origins")
+        .default(Vec::new())
+        .arg_value_parser(value_parser!(String))
+        .build()
+});
 
-    pub(super) static ref CORS_ALLOWED_METHODS: Parameter<Vec<String>> =
-        Parameter::builder("cors.allowed_methods")
-            .argument("--cors-allowed-method")
-            .environment("NETIXFS_CORS_ALLOWED_METHODS")
-            .toml("cors.allowed_methods")
-            .default(vec!["GET".to_owned(), "HEAD".to_owned(), "POST".to_owned(), "PUT".to_owned(), "PATCH".to_owned(), "DELETE".to_owned(), "OPTIONS".to_owned()])
-            .arg_value_parser(value_parser!(String))
-            .build();
+pub(super) static CORS_ALLOWED_METHODS: LazyLock<Parameter<Vec<String>>> = LazyLock::new(|| {
+    Parameter::builder("cors.allowed_methods")
+        .argument("--cors-allowed-method")
+        .environment("NETIXFS_CORS_ALLOWED_METHODS")
+        .toml("cors.allowed_methods")
+        .default(vec![
+            "GET".to_owned(),
+            "HEAD".to_owned(),
+            "POST".to_owned(),
+            "PUT".to_owned(),
+            "PATCH".to_owned(),
+            "DELETE".to_owned(),
+            "OPTIONS".to_owned(),
+        ])
+        .arg_value_parser(value_parser!(String))
+        .build()
+});
 
-    pub(super) static ref CORS_ALLOWED_REQUEST_HEADERS: Parameter<Vec<String>> =
+pub(super) static CORS_ALLOWED_REQUEST_HEADERS: LazyLock<Parameter<Vec<String>>> =
+    LazyLock::new(|| {
         Parameter::builder("cors.allowed_request_headers")
             .argument("--cors-allowed-request-header")
             .environment("NETIXFS_CORS_ALLOWED_REQUEST_HEADERS")
             .toml("cors.allowed_request_headers")
             .default(Vec::new())
             .arg_value_parser(value_parser!(String))
-            .build();
+            .build()
+    });
 
-    pub(super) static ref CORS_EXPOSED_RESPONSE_HEADERS: Parameter<Vec<String>> =
+pub(super) static CORS_EXPOSED_RESPONSE_HEADERS: LazyLock<Parameter<Vec<String>>> =
+    LazyLock::new(|| {
         Parameter::builder("cors.exposed_response_headers")
             .argument("--cors-exposed-response-header")
             .environment("NETIXFS_CORS_EXPOSED_RESPONSE_HEADERS")
             .toml("cors.exposed_response_headers")
             .default(Vec::new())
             .arg_value_parser(value_parser!(String))
-            .build();
+            .build()
+    });
 
-    pub(super) static ref CORS_MAX_AGE: Parameter<Simple<HumanDuration>> =
-        Parameter::builder("cors.max_age")
-            .argument("--cors-max-age")
-            .environment("NETIXFS_CORS_MAX_AGE")
-            .toml("cors.max_age")
-            .default(HumanDuration(Duration::from_secs(600)))
-            .arg_value_parser(value_parser!(String))
-            .build();
+pub(super) static CORS_MAX_AGE: LazyLock<Parameter<Simple<HumanDuration>>> = LazyLock::new(|| {
+    Parameter::builder("cors.max_age")
+        .argument("--cors-max-age")
+        .environment("NETIXFS_CORS_MAX_AGE")
+        .toml("cors.max_age")
+        .default(HumanDuration(Duration::from_secs(600)))
+        .arg_value_parser(value_parser!(String))
+        .build()
+});
 
-    pub(super) static ref CORS_ALLOW_CREDENTIALS: Parameter<Simple<bool>> =
-        Parameter::builder("cors.allow_credentials")
-            .argument("--cors-allow-credentials")
-            .environment("NETIXFS_CORS_ALLOW_CREDENTIALS")
-            .toml("cors.allow_credentials")
-            .default(false)
-            .arg_value_parser(BoolishValueParser::new())
-            .build();
+pub(super) static CORS_ALLOW_CREDENTIALS: LazyLock<Parameter<Simple<bool>>> = LazyLock::new(|| {
+    Parameter::builder("cors.allow_credentials")
+        .argument("--cors-allow-credentials")
+        .environment("NETIXFS_CORS_ALLOW_CREDENTIALS")
+        .toml("cors.allow_credentials")
+        .default(false)
+        .arg_value_parser(BoolishValueParser::new())
+        .build()
+});
 
-    pub(super) static ref CORS_ALLOW_PRIVATE_NETWORK: Parameter<Simple<bool>> =
+pub(super) static CORS_ALLOW_PRIVATE_NETWORK: LazyLock<Parameter<Simple<bool>>> =
+    LazyLock::new(|| {
         Parameter::builder("cors.allow_private_network")
             .argument("--cors-allow-private-network")
             .environment("NETIXFS_CORS_ALLOW_PRIVATE_NETWORK")
             .toml("cors.allow_private_network")
             .default(false)
             .arg_value_parser(BoolishValueParser::new())
-            .build();
+            .build()
+    });
 
-    // ── Authentication ───────────────────────────────────────────────────────────────────
-    pub(super) static ref AUTH_JWT_PUBLIC_KEY_PATH: Parameter<Option<PathBuf>> =
+// ── Authentication ───────────────────────────────────────────────────────────────────
+pub(super) static AUTH_JWT_PUBLIC_KEY_PATH: LazyLock<Parameter<Option<PathBuf>>> =
+    LazyLock::new(|| {
         Parameter::builder("auth.jwt.public_key_path")
             .argument("--jwt-public-key-path")
             .environment("NETIXFS_AUTH_JWT_PUBLIC_KEY_PATH")
             .toml("auth.jwt.public_key_path")
             .default(None)
             .arg_value_parser(value_parser!(PathBuf))
-            .build();
+            .build()
+    });
 
-    pub(super) static ref AUTH_JWT_PUBLIC_KEY_URL: Parameter<Option<Url>> =
-        Parameter::builder("auth.jwt.public_key_url")
-            .argument("--jwt-public-key-url")
-            .environment("NETIXFS_AUTH_JWT_PUBLIC_KEY_URL")
-            .toml("auth.jwt.public_key_url")
-            .default(None)
-            .sensitive() // secret-bearing URL: may contain embedded credentials
-            .arg_value_parser(value_parser!(Url))
-            .build();
+pub(super) static AUTH_JWT_PUBLIC_KEY_URL: LazyLock<Parameter<Option<Url>>> = LazyLock::new(|| {
+    Parameter::builder("auth.jwt.public_key_url")
+        .argument("--jwt-public-key-url")
+        .environment("NETIXFS_AUTH_JWT_PUBLIC_KEY_URL")
+        .toml("auth.jwt.public_key_url")
+        .default(None)
+        .sensitive() // secret-bearing URL: may contain embedded credentials
+        .arg_value_parser(value_parser!(Url))
+        .build()
+});
 
-    pub(super) static ref AUTH_JWT_JWKS_PATH: Parameter<Option<PathBuf>> =
-        Parameter::builder("auth.jwt.jwks_path")
-            .argument("--jwt-jwks-path")
-            .environment("NETIXFS_AUTH_JWT_JWKS_PATH")
-            .toml("auth.jwt.jwks_path")
-            .default(None)
-            .arg_value_parser(value_parser!(PathBuf))
-            .build();
+pub(super) static AUTH_JWT_JWKS_PATH: LazyLock<Parameter<Option<PathBuf>>> = LazyLock::new(|| {
+    Parameter::builder("auth.jwt.jwks_path")
+        .argument("--jwt-jwks-path")
+        .environment("NETIXFS_AUTH_JWT_JWKS_PATH")
+        .toml("auth.jwt.jwks_path")
+        .default(None)
+        .arg_value_parser(value_parser!(PathBuf))
+        .build()
+});
 
-    pub(super) static ref AUTH_JWT_JWKS_URL: Parameter<Option<Url>> =
-        Parameter::builder("auth.jwt.jwks_url")
-            .argument("--jwt-jwks-url")
-            .environment("NETIXFS_AUTH_JWT_JWKS_URL")
-            .toml("auth.jwt.jwks_url")
-            .default(None)
-            .sensitive() // secret-bearing URL: may contain embedded credentials
-            .arg_value_parser(value_parser!(Url))
-            .build();
+pub(super) static AUTH_JWT_JWKS_URL: LazyLock<Parameter<Option<Url>>> = LazyLock::new(|| {
+    Parameter::builder("auth.jwt.jwks_url")
+        .argument("--jwt-jwks-url")
+        .environment("NETIXFS_AUTH_JWT_JWKS_URL")
+        .toml("auth.jwt.jwks_url")
+        .default(None)
+        .sensitive() // secret-bearing URL: may contain embedded credentials
+        .arg_value_parser(value_parser!(Url))
+        .build()
+});
 
-    pub(super) static ref AUTH_JWT_ISSUER: Parameter<Option<String>> =
-        Parameter::builder("auth.jwt.issuer")
-            .argument("--jwt-issuer")
-            .environment("NETIXFS_AUTH_JWT_ISSUER")
-            .toml("auth.jwt.issuer")
-            .default(None)
-            .arg_value_parser(value_parser!(String))
-            .build();
+pub(super) static AUTH_JWT_ISSUER: LazyLock<Parameter<Option<String>>> = LazyLock::new(|| {
+    Parameter::builder("auth.jwt.issuer")
+        .argument("--jwt-issuer")
+        .environment("NETIXFS_AUTH_JWT_ISSUER")
+        .toml("auth.jwt.issuer")
+        .default(None)
+        .arg_value_parser(value_parser!(String))
+        .build()
+});
 
-    pub(super) static ref AUTH_JWT_AUDIENCE: Parameter<Option<String>> =
-        Parameter::builder("auth.jwt.audience")
-            .argument("--jwt-audience")
-            .environment("NETIXFS_AUTH_JWT_AUDIENCE")
-            .toml("auth.jwt.audience")
-            .default(None)
-            .arg_value_parser(value_parser!(String))
-            .build();
+pub(super) static AUTH_JWT_AUDIENCE: LazyLock<Parameter<Option<String>>> = LazyLock::new(|| {
+    Parameter::builder("auth.jwt.audience")
+        .argument("--jwt-audience")
+        .environment("NETIXFS_AUTH_JWT_AUDIENCE")
+        .toml("auth.jwt.audience")
+        .default(None)
+        .arg_value_parser(value_parser!(String))
+        .build()
+});
 
-    pub(super) static ref AUTH_JWT_USERNAME_CLAIM: Parameter<Simple<String>> =
+pub(super) static AUTH_JWT_USERNAME_CLAIM: LazyLock<Parameter<Simple<String>>> =
+    LazyLock::new(|| {
         Parameter::builder("auth.jwt.username_claim")
             .argument("--jwt-username-claim")
             .environment("NETIXFS_AUTH_JWT_USERNAME_CLAIM")
             .toml("auth.jwt.username_claim")
             .default("sub".to_owned())
             .arg_value_parser(value_parser!(String))
-            .build();
+            .build()
+    });
 
-    pub(super) static ref AUTH_JWT_REMOTE_KEY_REFRESH_INTERVAL: Parameter<Simple<HumanDuration>> =
+pub(super) static AUTH_JWT_REMOTE_KEY_REFRESH_INTERVAL: LazyLock<Parameter<Simple<HumanDuration>>> =
+    LazyLock::new(|| {
         Parameter::builder("auth.jwt.remote_key_refresh_interval")
             .argument("--jwt-remote-key-refresh-interval")
             .environment("NETIXFS_AUTH_JWT_REMOTE_KEY_REFRESH_INTERVAL")
             .toml("auth.jwt.remote_key_refresh_interval")
             .default(HumanDuration(Duration::from_mins(5)))
             .arg_value_parser(value_parser!(HumanDuration))
-            .build();
+            .build()
+    });
 
-    // ── Filesystem ───────────────────────────────────────────────────────────────────────
-    pub(super) static ref FILESYSTEM_ALLOWED_ROOTS: Parameter<Vec<Root>> =
-        Parameter::builder("filesystem.allowed_roots")
-            .argument("--allowed-root")
-            .environment("NETIXFS_FILESYSTEM_ALLOWED_ROOTS")
-            .toml("filesystem.allowed_roots")
-            .default(Vec::new())
-            .arg_value_parser(value_parser!(Root))
-            .arg_action(ArgAction::Append)
-            .build();
+// ── Filesystem ───────────────────────────────────────────────────────────────────────
+pub(super) static FILESYSTEM_ALLOWED_ROOTS: LazyLock<Parameter<Vec<Root>>> = LazyLock::new(|| {
+    Parameter::builder("filesystem.allowed_roots")
+        .argument("--allowed-root")
+        .environment("NETIXFS_FILESYSTEM_ALLOWED_ROOTS")
+        .toml("filesystem.allowed_roots")
+        .default(Vec::new())
+        .arg_value_parser(value_parser!(Root))
+        .arg_action(ArgAction::Append)
+        .build()
+});
 
-    pub(super) static ref FILESYSTEM_READ_ONLY: Parameter<Simple<bool>> =
-        Parameter::builder("filesystem.read_only")
-            .argument("--read-only")
-            .environment("NETIXFS_FILESYSTEM_READ_ONLY")
-            .toml("filesystem.read_only")
-            .default(false)
-            .arg_value_parser(BoolishValueParser::new())
-            .build();
+pub(super) static FILESYSTEM_READ_ONLY: LazyLock<Parameter<Simple<bool>>> = LazyLock::new(|| {
+    Parameter::builder("filesystem.read_only")
+        .argument("--read-only")
+        .environment("NETIXFS_FILESYSTEM_READ_ONLY")
+        .toml("filesystem.read_only")
+        .default(false)
+        .arg_value_parser(BoolishValueParser::new())
+        .build()
+});
 
-    pub(super) static ref FILESYSTEM_DEFAULT_FILE_MODE: Parameter<Simple<FileMode>> =
+pub(super) static FILESYSTEM_DEFAULT_FILE_MODE: LazyLock<Parameter<Simple<FileMode>>> =
+    LazyLock::new(|| {
         Parameter::builder("filesystem.default_file_mode")
             .argument("--default-file-mode")
             .environment("NETIXFS_FILESYSTEM_DEFAULT_FILE_MODE")
             .toml("filesystem.default_file_mode")
             .default(FileMode(0o0644))
             .arg_value_parser(value_parser!(FileMode))
-            .build();
+            .build()
+    });
 
-    pub(super) static ref FILESYSTEM_DEFAULT_DIR_MODE: Parameter<Simple<FileMode>> =
+pub(super) static FILESYSTEM_DEFAULT_DIR_MODE: LazyLock<Parameter<Simple<FileMode>>> =
+    LazyLock::new(|| {
         Parameter::builder("filesystem.default_dir_mode")
             .argument("--default-dir-mode")
             .environment("NETIXFS_FILESYSTEM_DEFAULT_DIR_MODE")
             .toml("filesystem.default_dir_mode")
             .default(FileMode(0o0755))
             .arg_value_parser(value_parser!(FileMode))
-            .build();
+            .build()
+    });
 
-    pub(super) static ref FILESYSTEM_UMASK: Parameter<Option<FileMode>> =
-        Parameter::builder("filesystem.umask")
-            .argument("--umask")
-            .environment("NETIXFS_FILESYSTEM_UMASK")
-            .toml("filesystem.umask")
-            .default(None) // inherits process umask at runtime
-            .arg_value_parser(value_parser!(FileMode))
-            .build();
+pub(super) static FILESYSTEM_UMASK: LazyLock<Parameter<Option<FileMode>>> = LazyLock::new(|| {
+    Parameter::builder("filesystem.umask")
+        .argument("--umask")
+        .environment("NETIXFS_FILESYSTEM_UMASK")
+        .toml("filesystem.umask")
+        .default(None) // inherits process umask at runtime
+        .arg_value_parser(value_parser!(FileMode))
+        .build()
+});
 
-    pub(super) static ref FILESYSTEM_SYMLINK_POLICY: Parameter<Simple<SymlinkPolicy>> =
+pub(super) static FILESYSTEM_SYMLINK_POLICY: LazyLock<Parameter<Simple<SymlinkPolicy>>> =
+    LazyLock::new(|| {
         Parameter::builder("filesystem.symlink_policy")
             .argument("--symlink-policy")
             .environment("NETIXFS_FILESYSTEM_SYMLINK_POLICY")
             .toml("filesystem.symlink_policy")
             .default(SymlinkPolicy::Reject)
             .arg_value_parser(value_parser!(SymlinkPolicy))
-            .build();
+            .build()
+    });
 
-    pub(super) static ref FILESYSTEM_ALLOW_MOUNT_CROSSING: Parameter<Simple<bool>> =
+pub(super) static FILESYSTEM_ALLOW_MOUNT_CROSSING: LazyLock<Parameter<Simple<bool>>> =
+    LazyLock::new(|| {
         Parameter::builder("filesystem.allow_mount_crossing")
             .argument("--allow-mount-crossing")
             .environment("NETIXFS_FILESYSTEM_ALLOW_MOUNT_CROSSING")
             .toml("filesystem.allow_mount_crossing")
             .default(false)
             .arg_value_parser(BoolishValueParser::new())
-            .build();
+            .build()
+    });
 
-    // ── Operations ───────────────────────────────────────────────────────────────────────
-    pub(super) static ref OPERATIONS_ALLOW_RECURSIVE_DELETE: Parameter<Simple<bool>> =
+// ── Operations ───────────────────────────────────────────────────────────────────────
+pub(super) static OPERATIONS_ALLOW_RECURSIVE_DELETE: LazyLock<Parameter<Simple<bool>>> =
+    LazyLock::new(|| {
         Parameter::builder("operations.allow_recursive_delete")
             .argument("--allow-recursive-delete")
             .environment("NETIXFS_OPERATIONS_ALLOW_RECURSIVE_DELETE")
             .toml("operations.allow_recursive_delete")
-            .default(true) .arg_value_parser(BoolishValueParser::new())
-            .build();
+            .default(true)
+            .arg_value_parser(BoolishValueParser::new())
+            .build()
+    });
 
-    pub(super) static ref OPERATIONS_ALLOW_RECURSIVE_COPY: Parameter<Simple<bool>> =
+pub(super) static OPERATIONS_ALLOW_RECURSIVE_COPY: LazyLock<Parameter<Simple<bool>>> =
+    LazyLock::new(|| {
         Parameter::builder("operations.allow_recursive_copy")
             .argument("--allow-recursive-copy")
             .environment("NETIXFS_OPERATIONS_ALLOW_RECURSIVE_COPY")
             .toml("operations.allow_recursive_copy")
             .default(true)
             .arg_value_parser(BoolishValueParser::new())
-            .build();
+            .build()
+    });
 
-    pub(super) static ref OPERATIONS_ALLOW_CHMOD: Parameter<Simple<bool>> =
-        Parameter::builder("operations.allow_chmod")
-            .argument("--allow-chmod")
-            .environment("NETIXFS_OPERATIONS_ALLOW_CHMOD")
-            .toml("operations.allow_chmod")
-            .default(true)
-            .arg_value_parser(BoolishValueParser::new())
-            .build();
+pub(super) static OPERATIONS_ALLOW_CHMOD: LazyLock<Parameter<Simple<bool>>> = LazyLock::new(|| {
+    Parameter::builder("operations.allow_chmod")
+        .argument("--allow-chmod")
+        .environment("NETIXFS_OPERATIONS_ALLOW_CHMOD")
+        .toml("operations.allow_chmod")
+        .default(true)
+        .arg_value_parser(BoolishValueParser::new())
+        .build()
+});
 
-    pub(super) static ref OPERATIONS_ALLOW_HARD_LINKS: Parameter<Simple<bool>> =
+pub(super) static OPERATIONS_ALLOW_HARD_LINKS: LazyLock<Parameter<Simple<bool>>> =
+    LazyLock::new(|| {
         Parameter::builder("operations.allow_hard_links")
             .argument("--allow-hard-links")
             .environment("NETIXFS_OPERATIONS_ALLOW_HARD_LINKS")
             .toml("operations.allow_hard_links")
             .default(true)
             .arg_value_parser(BoolishValueParser::new())
-            .build();
+            .build()
+    });
 
-    pub(super) static ref OPERATIONS_ALLOW_SYMLINK_CREATE: Parameter<Simple<bool>> =
+pub(super) static OPERATIONS_ALLOW_SYMLINK_CREATE: LazyLock<Parameter<Simple<bool>>> =
+    LazyLock::new(|| {
         Parameter::builder("operations.allow_symlink_create")
             .argument("--allow-symlink-create")
             .environment("NETIXFS_OPERATIONS_ALLOW_SYMLINK_CREATE")
             .toml("operations.allow_symlink_create")
             .default(true)
             .arg_value_parser(BoolishValueParser::new())
-            .build();
+            .build()
+    });
 
-    // ── Limits ───────────────────────────────────────────────────────────────────────────
-    pub(super) static ref LIMITS_MAX_REQUEST_BODY_SIZE: Parameter<Simple<ByteSize>> =
+// ── Limits ───────────────────────────────────────────────────────────────────────────
+pub(super) static LIMITS_MAX_REQUEST_BODY_SIZE: LazyLock<Parameter<Simple<ByteSize>>> =
+    LazyLock::new(|| {
         Parameter::builder("limits.max_request_body_size")
             .argument("--max-request-body-size")
             .environment("NETIXFS_LIMITS_MAX_REQUEST_BODY_SIZE")
             .toml("limits.max_request_body_size")
             .default(ByteSize::mib(100))
             .arg_value_parser(value_parser!(ByteSize))
-            .build();
+            .build()
+    });
 
-    pub(super) static ref LIMITS_MAX_READ_SIZE: Parameter<Simple<ByteSize>> =
+pub(super) static LIMITS_MAX_READ_SIZE: LazyLock<Parameter<Simple<ByteSize>>> =
+    LazyLock::new(|| {
         Parameter::builder("limits.max_read_size")
             .argument("--max-read-size")
             .environment("NETIXFS_LIMITS_MAX_READ_SIZE")
             .toml("limits.max_read_size")
             .default(ByteSize::mib(100))
             .arg_value_parser(value_parser!(ByteSize))
-            .build();
+            .build()
+    });
 
-    pub(super) static ref LIMITS_MAX_DIRECTORY_ENTRIES: Parameter<Simple<u32>> =
+pub(super) static LIMITS_MAX_DIRECTORY_ENTRIES: LazyLock<Parameter<Simple<u32>>> =
+    LazyLock::new(|| {
         Parameter::builder("limits.max_directory_entries")
             .argument("--max-directory-entries")
             .environment("NETIXFS_LIMITS_MAX_DIRECTORY_ENTRIES")
             .toml("limits.max_directory_entries")
             .default(10000u32)
             .arg_value_parser(value_parser!(u32))
-            .build();
+            .build()
+    });
 
-    pub(super) static ref LIMITS_MAX_CONCURRENT_REQUESTS: Parameter<Simple<u32>> =
+pub(super) static LIMITS_MAX_CONCURRENT_REQUESTS: LazyLock<Parameter<Simple<u32>>> =
+    LazyLock::new(|| {
         Parameter::builder("limits.max_concurrent_requests")
             .argument("--max-concurrent-requests")
             .environment("NETIXFS_LIMITS_MAX_CONCURRENT_REQUESTS")
             .toml("limits.max_concurrent_requests")
             .default(1024u32)
             .arg_value_parser(value_parser!(u32))
-            .build();
+            .build()
+    });
 
-    pub(super) static ref LIMITS_MAX_CONCURRENT_STREAMS: Parameter<Simple<u32>> =
+pub(super) static LIMITS_MAX_CONCURRENT_STREAMS: LazyLock<Parameter<Simple<u32>>> =
+    LazyLock::new(|| {
         Parameter::builder("limits.max_concurrent_streams")
             .argument("--max-concurrent-streams")
             .environment("NETIXFS_LIMITS_MAX_CONCURRENT_STREAMS")
             .toml("limits.max_concurrent_streams")
             .default(128u32)
             .arg_value_parser(value_parser!(u32))
-            .build();
+            .build()
+    });
 
-    // ── Streaming ────────────────────────────────────────────────────────────────────────
-    pub(super) static ref STREAMING_IDLE_TIMEOUT: Parameter<Simple<HumanDuration>> =
+// ── Streaming ────────────────────────────────────────────────────────────────────────
+pub(super) static STREAMING_IDLE_TIMEOUT: LazyLock<Parameter<Simple<HumanDuration>>> =
+    LazyLock::new(|| {
         Parameter::builder("streaming.idle_timeout")
             .argument("--stream-idle-timeout")
             .environment("NETIXFS_STREAMING_IDLE_TIMEOUT")
             .toml("streaming.idle_timeout")
             .default(HumanDuration(Duration::from_mins(5)))
             .arg_value_parser(value_parser!(HumanDuration))
-            .build();
+            .build()
+    });
 
-    pub(super) static ref STREAMING_MAX_DURATION: Parameter<Simple<HumanDuration>> =
+pub(super) static STREAMING_MAX_DURATION: LazyLock<Parameter<Simple<HumanDuration>>> =
+    LazyLock::new(|| {
         Parameter::builder("streaming.max_duration")
             .argument("--stream-max-duration")
             .environment("NETIXFS_STREAMING_MAX_DURATION")
             .toml("streaming.max_duration")
             .default(HumanDuration(Duration::from_hours(1)))
             .arg_value_parser(value_parser!(HumanDuration))
-            .build();
+            .build()
+    });
 
-    pub(super) static ref STREAMING_HEARTBEAT_INTERVAL: Parameter<Simple<HumanDuration>> =
+pub(super) static STREAMING_HEARTBEAT_INTERVAL: LazyLock<Parameter<Simple<HumanDuration>>> =
+    LazyLock::new(|| {
         Parameter::builder("streaming.heartbeat_interval")
             .argument("--stream-heartbeat-interval")
             .environment("NETIXFS_STREAMING_HEARTBEAT_INTERVAL")
             .toml("streaming.heartbeat_interval")
             .default(HumanDuration(Duration::from_secs(30)))
             .arg_value_parser(value_parser!(HumanDuration))
-            .build();
+            .build()
+    });
 
-    // ── Worker Pool ──────────────────────────────────────────────────────────────────────
-    pub(super) static ref POOL_MAX_WORKERS: Parameter<Simple<u32>> =
-        Parameter::builder("pool.max_workers")
-            .argument("--pool-max-workers")
-            .environment("NETIXFS_POOL_MAX_WORKERS")
-            .toml("pool.max_workers")
-            .default(64u32)
-            .arg_value_parser(value_parser!(u32))
-            .build();
+// ── Worker Pool ──────────────────────────────────────────────────────────────────────
+pub(super) static POOL_MAX_WORKERS: LazyLock<Parameter<Simple<u32>>> = LazyLock::new(|| {
+    Parameter::builder("pool.max_workers")
+        .argument("--pool-max-workers")
+        .environment("NETIXFS_POOL_MAX_WORKERS")
+        .toml("pool.max_workers")
+        .default(64u32)
+        .arg_value_parser(value_parser!(u32))
+        .build()
+});
 
-    pub(super) static ref POOL_IDLE_TIMEOUT: Parameter<Simple<HumanDuration>> =
+pub(super) static POOL_IDLE_TIMEOUT: LazyLock<Parameter<Simple<HumanDuration>>> =
+    LazyLock::new(|| {
         Parameter::builder("pool.idle_timeout")
             .argument("--pool-idle-timeout")
             .environment("NETIXFS_POOL_IDLE_TIMEOUT")
             .toml("pool.idle_timeout")
             .default(HumanDuration(Duration::from_mins(5)))
             .arg_value_parser(value_parser!(HumanDuration))
-            .build();
+            .build()
+    });
 
-    pub(super) static ref POOL_REQUEST_TIMEOUT: Parameter<Simple<HumanDuration>> =
+pub(super) static POOL_REQUEST_TIMEOUT: LazyLock<Parameter<Simple<HumanDuration>>> =
+    LazyLock::new(|| {
         Parameter::builder("pool.request_timeout")
             .argument("--pool-request-timeout")
             .environment("NETIXFS_POOL_REQUEST_TIMEOUT")
             .toml("pool.request_timeout")
             .default(HumanDuration(Duration::from_secs(30)))
             .arg_value_parser(value_parser!(HumanDuration))
-            .build();
+            .build()
+    });
 
-    // ── Logging ──────────────────────────────────────────────────────────────────────────
-    pub(super) static ref LOGGING_LEVEL: Parameter<Simple<LogLevel>> =
-        Parameter::builder("logging.level")
-            .argument("--log-level")
-            .environment("NETIXFS_LOGGING_LEVEL")
-            .toml("logging.level")
-            .default(LogLevel::Info)
-            .arg_value_parser(value_parser!(LogLevel))
-            .build();
+// ── Logging ──────────────────────────────────────────────────────────────────────────
+pub(super) static LOGGING_LEVEL: LazyLock<Parameter<Simple<LogLevel>>> = LazyLock::new(|| {
+    Parameter::builder("logging.level")
+        .argument("--log-level")
+        .environment("NETIXFS_LOGGING_LEVEL")
+        .toml("logging.level")
+        .default(LogLevel::Info)
+        .arg_value_parser(value_parser!(LogLevel))
+        .build()
+});
 
-    pub(super) static ref LOGGING_FORMAT: Parameter<Simple<LogFormat>> =
-        Parameter::builder("logging.format")
-            .argument("--log-format")
-            .environment("NETIXFS_LOGGING_FORMAT")
-            .toml("logging.format")
-            .default(LogFormat::Json)
-            .arg_value_parser(value_parser!(LogFormat))
-            .build();
+pub(super) static LOGGING_FORMAT: LazyLock<Parameter<Simple<LogFormat>>> = LazyLock::new(|| {
+    Parameter::builder("logging.format")
+        .argument("--log-format")
+        .environment("NETIXFS_LOGGING_FORMAT")
+        .toml("logging.format")
+        .default(LogFormat::Json)
+        .arg_value_parser(value_parser!(LogFormat))
+        .build()
+});
 
-    pub(super) static ref LOGGING_REDACT_PATHS: Parameter<Simple<bool>> =
-        Parameter::builder("logging.redact_paths")
-            .argument("--log-redact-paths")
-            .environment("NETIXFS_LOGGING_REDACT_PATHS")
-            .toml("logging.redact_paths")
-            .default(false)
-            .arg_value_parser(BoolishValueParser::new())
-            .build();
+pub(super) static LOGGING_REDACT_PATHS: LazyLock<Parameter<Simple<bool>>> = LazyLock::new(|| {
+    Parameter::builder("logging.redact_paths")
+        .argument("--log-redact-paths")
+        .environment("NETIXFS_LOGGING_REDACT_PATHS")
+        .toml("logging.redact_paths")
+        .default(false)
+        .arg_value_parser(BoolishValueParser::new())
+        .build()
+});
 
-    // ── Metrics ──────────────────────────────────────────────────────────────────────────
-    pub(super) static ref METRICS_ENABLED: Parameter<Simple<bool>> =
-        Parameter::builder("metrics.enabled")
-            .argument("--metrics-enabled")
-            .environment("NETIXFS_METRICS_ENABLED")
-            .toml("metrics.enabled")
-            .default(false)
-            .arg_value_parser(BoolishValueParser::new())
-            .build();
+// ── Metrics ──────────────────────────────────────────────────────────────────────────
+pub(super) static METRICS_ENABLED: LazyLock<Parameter<Simple<bool>>> = LazyLock::new(|| {
+    Parameter::builder("metrics.enabled")
+        .argument("--metrics-enabled")
+        .environment("NETIXFS_METRICS_ENABLED")
+        .toml("metrics.enabled")
+        .default(false)
+        .arg_value_parser(BoolishValueParser::new())
+        .build()
+});
 
-    pub(super) static ref METRICS_BIND_ADDRESS: Parameter<Simple<IpAddr>> =
-        Parameter::builder("metrics.bind_address")
-            .argument("--metrics-bind-address")
-            .environment("NETIXFS_METRICS_BIND_ADDRESS")
-            .toml("metrics.bind_address")
-            .default(IpAddr::V4(Ipv4Addr::LOCALHOST))
-            .arg_value_parser(value_parser!(IpAddr))
-            .build();
+pub(super) static METRICS_BIND_ADDRESS: LazyLock<Parameter<Simple<IpAddr>>> = LazyLock::new(|| {
+    Parameter::builder("metrics.bind_address")
+        .argument("--metrics-bind-address")
+        .environment("NETIXFS_METRICS_BIND_ADDRESS")
+        .toml("metrics.bind_address")
+        .default(IpAddr::V4(Ipv4Addr::LOCALHOST))
+        .arg_value_parser(value_parser!(IpAddr))
+        .build()
+});
 
-    pub(super) static ref METRICS_PORT: Parameter<Simple<u16>> =
-        Parameter::builder("metrics.port")
-            .argument("--metrics-port")
-            .environment("NETIXFS_METRICS_PORT")
-            .toml("metrics.port")
-            .default(9090u16)
-            .arg_value_parser(value_parser!(u16))
-            .build();
+pub(super) static METRICS_PORT: LazyLock<Parameter<Simple<u16>>> = LazyLock::new(|| {
+    Parameter::builder("metrics.port")
+        .argument("--metrics-port")
+        .environment("NETIXFS_METRICS_PORT")
+        .toml("metrics.port")
+        .default(9090u16)
+        .arg_value_parser(value_parser!(u16))
+        .build()
+});
 
-    // ── Diagnostics ───────────────────────────────────────────────────────────────────────
-    pub(super) static ref DIAGNOSTICS_CONFIG_ENDPOINT_ENABLED: Parameter<Simple<bool>> =
+// ── Diagnostics ───────────────────────────────────────────────────────────────────────
+pub(super) static DIAGNOSTICS_CONFIG_ENDPOINT_ENABLED: LazyLock<Parameter<Simple<bool>>> =
+    LazyLock::new(|| {
         Parameter::builder("diagnostics.config_endpoint.enabled")
             .argument("--config-endpoint-enabled")
             .environment("NETIXFS_DIAGNOSTICS_CONFIG_ENDPOINT_ENABLED")
             .toml("diagnostics.config_endpoint.enabled")
             .default(false)
             .arg_value_parser(BoolishValueParser::new())
-            .build();
+            .build()
+    });
 
-    pub(super) static ref DIAGNOSTICS_CONFIG_ENDPOINT_BIND_ADDRESS: Parameter<Simple<SocketAddr>> =
-        Parameter::builder("diagnostics.config_endpoint.bind_address")
-            .argument("--config-endpoint-bind-address")
-            .environment("NETIXFS_DIAGNOSTICS_CONFIG_ENDPOINT_BIND_ADDRESS")
-            .toml("diagnostics.config_endpoint.bind_address")
-            .default(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 8081)))
-            .arg_value_parser(value_parser!(SocketAddr))
-            .build();
-}
+pub(super) static DIAGNOSTICS_CONFIG_ENDPOINT_BIND_ADDRESS: LazyLock<
+    Parameter<Simple<SocketAddr>>,
+> = LazyLock::new(|| {
+    Parameter::builder("diagnostics.config_endpoint.bind_address")
+        .argument("--config-endpoint-bind-address")
+        .environment("NETIXFS_DIAGNOSTICS_CONFIG_ENDPOINT_BIND_ADDRESS")
+        .toml("diagnostics.config_endpoint.bind_address")
+        .default(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 8081)))
+        .arg_value_parser(value_parser!(SocketAddr))
+        .build()
+});
 
 pub(super) fn arguments() -> impl IntoIterator<Item = Arg> {
-    [
+    vec![
         CONFIG_FILE.to_arg(),
         // ── Server ───────────────────────────────────────────────────────────────
         SERVER_BIND_ADDRESS.to_arg(),

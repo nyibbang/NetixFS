@@ -1,4 +1,4 @@
-pub(crate) use self::{error::ErrorResponse, user::User};
+pub use self::{error::ErrorResponse, user::User};
 use crate::config::Config;
 use auth::Authenticator;
 use axum::{
@@ -32,7 +32,7 @@ async fn health() -> Json<Value> {
     Json(json!({ "status": "ok" }))
 }
 
-pub(crate) fn service(config: Arc<Config>) -> Router {
+pub fn service(config: Arc<Config>) -> Router {
     let generic_middleware = ServiceBuilder::new()
         // Mark the `Authorization` and `Cookie` headers as sensitive so it doesn't show in logs
         .sensitive_headers([header::AUTHORIZATION, header::COOKIE])
@@ -45,7 +45,7 @@ pub(crate) fn service(config: Arc<Config>) -> Router {
         .layer(
             TraceLayer::new_for_http()
                 .on_body_chunk(|chunk: &Bytes, latency: Duration, _: &tracing::Span| {
-                    tracing::trace!(size_bytes = chunk.len(), latency = ?latency, "sending body chunk")
+                    tracing::trace!(size_bytes = chunk.len(), latency = ?latency, "sending body chunk");
                 })
                 .make_span_with(DefaultMakeSpan::new().include_headers(true))
                 .on_response(DefaultOnResponse::new().include_headers(true))
@@ -57,7 +57,7 @@ pub(crate) fn service(config: Arc<Config>) -> Router {
         .request_body_limit(
             config
                 .limits
-                .max_request_body_size
+                .request_body_size
                 .value
                 .as_u64()
                 .try_into()
@@ -65,7 +65,7 @@ pub(crate) fn service(config: Arc<Config>) -> Router {
         )
         .set_x_request_id(MakeRequestUuid)
         .layer(AsyncRequireAuthorizationLayer::new(Authenticator::new(
-            Arc::clone(&config),
+            config,
         )))
         .insert_response_header_if_not_present(
             header::CONTENT_TYPE,
@@ -78,7 +78,7 @@ pub(crate) fn service(config: Arc<Config>) -> Router {
         .route_layer(middleware)
 }
 
-pub(crate) fn meta_services() -> Router {
+pub fn meta_services() -> Router {
     Router::new()
         .route("/healthz", get(health))
         .route("/readyz", get(ready::run_checks))

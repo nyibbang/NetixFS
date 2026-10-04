@@ -16,12 +16,12 @@ use tracing::warn;
 /// as a JSON Web Token, finds the Linux user associated to this token and gets the roots that are
 /// configured for this user.
 #[derive(Clone)]
-pub(crate) struct Authenticator {
+pub struct Authenticator {
     config: Arc<Config>,
 }
 
 impl Authenticator {
-    pub(super) fn new(config: Arc<Config>) -> Self {
+    pub(super) const fn new(config: Arc<Config>) -> Self {
         Self { config }
     }
 }
@@ -39,14 +39,11 @@ where
         async move {
             let method = request.method();
             let path = request.uri().path();
-            let request_id = match request.extensions().get::<RequestId>().cloned() {
-                Some(id) => id,
-                None => {
-                    return Err(ServiceError::missing_request_id(
-                        method.to_string(),
-                        Some(path.to_owned()),
-                    ));
-                }
+            let Some(request_id) = request.extensions().get::<RequestId>().cloned() else {
+                return Err(ServiceError::missing_request_id(
+                    method.to_string(),
+                    Some(path.to_owned()),
+                ));
             };
             let headers = request.headers();
             let user = async {
@@ -56,7 +53,7 @@ where
                         details = %err,
                         ?request_id,
                         "authentication failure"
-                    )
+                    );
                 })
             }
             .await
@@ -126,15 +123,15 @@ impl Error {
         request_id: Option<RequestId>,
     ) -> ServiceError {
         let (status, retryable) = match &self {
-            Error::InternalKeyVerification | Error::NssLookupFailed(_) => {
+            Self::InternalKeyVerification | Self::NssLookupFailed(_) => {
                 (StatusCode::SERVICE_UNAVAILABLE, true)
             }
-            Error::MissingOrInvalidHeader
-            | Error::DecodeJwtHeader(_)
-            | Error::InvalidToken(_)
-            | Error::MissingKidClaim
-            | Error::KidNotFound(_)
-            | Error::MissingUsernameClaim(_) => (StatusCode::UNAUTHORIZED, false),
+            Self::MissingOrInvalidHeader
+            | Self::DecodeJwtHeader(_)
+            | Self::InvalidToken(_)
+            | Self::MissingKidClaim
+            | Self::KidNotFound(_)
+            | Self::MissingUsernameClaim(_) => (StatusCode::UNAUTHORIZED, false),
         };
 
         ServiceError {

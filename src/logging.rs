@@ -1,7 +1,7 @@
 use crate::{Config, config::LogFormat};
 use tracing_subscriber::fmt;
 
-pub(super) fn setup(config: &Config) {
+pub fn setup(config: &Config) {
     let format = fmt::format();
     let subscriber = fmt::fmt().with_max_level(config.logging.level.value);
     // TODO: handle path redacting
