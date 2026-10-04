@@ -34,7 +34,7 @@ impl<'de> serde::Deserialize<'de> for Path {
                                 "could not decode path_b64 value: {decode_error}"
                             ))
                         })?;
-                let path_as_os_str = dbg!(OsStr::from_bytes(&path_as_bytes));
+                let path_as_os_str = OsStr::from_bytes(&path_as_bytes);
                 RelativePathBuf::from_path(path_as_os_str).map_err(|from_path_err| {
                     D::Error::custom(format!(
                         "could not build a path from base64 bytes {from_path_err}",
@@ -46,7 +46,7 @@ impl<'de> serde::Deserialize<'de> for Path {
                 return Err(D::Error::custom("both path and path_b64 are present"));
             }
         }?;
-        sanitize(&path).map_err(|err| D::Error::custom(err))?;
+        sanitize(&path).map_err(D::Error::custom)?;
         Ok(Self(path))
     }
 }
@@ -55,7 +55,7 @@ fn sanitize(path: &RelativePath) -> Result<(), String> {
     if path.components().count() == 0 {
         return Err("path must not be empty".to_string());
     }
-    if dbg!(dbg!(path).as_str().starts_with("/")) {
+    if path.as_str().starts_with('/') {
         return Err("path must be relative".to_string());
     }
     if path
