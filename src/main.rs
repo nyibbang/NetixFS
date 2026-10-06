@@ -1,17 +1,9 @@
 use axum::serve::serve;
-pub(crate) use config::Config;
 use eyre::Result;
-use std::{net::SocketAddr, pin::Pin, sync::Arc};
+use netixfs::{Config, config, logging, router};
+use std::{net::SocketAddr, sync::Arc};
 use tokio::{net::TcpListener, spawn};
 use tracing::debug;
-
-mod config;
-mod logging;
-mod path;
-mod router;
-mod worker;
-
-type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send + 'static>>;
 
 #[tokio::main]
 async fn main() -> Result<()> {

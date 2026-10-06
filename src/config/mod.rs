@@ -37,6 +37,11 @@ mod parameters;
 /// Load configuration from (optional) TOML file, environment variables,
 /// and CLI flags, merge them in precedence order (file < env < CLI), and
 /// resolve into a fully-typed `Config`.
+///
+/// # Errors
+///
+/// Returns an error if the config file cannot be read or parsed, or if the
+/// resolved values fail validation.
 pub fn load<I>(args: I) -> Result<Config>
 where
     I: IntoIterator,
@@ -486,6 +491,7 @@ impl From<FileMode> for Permissions {
 }
 
 impl FileMode {
+    #[must_use]
     pub const fn value(self) -> u32 {
         self.0
     }
@@ -566,10 +572,6 @@ pub enum SymlinkPolicy {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-#[expect(
-    clippy::struct_field_names,
-    reason = "field names are part of the /configz JSON output"
-)]
 pub struct Value<T> {
     pub value: T,
     pub source: ValueSource,
@@ -626,6 +628,9 @@ impl<T> Value<Option<T>> {
     }
 }
 
+/// # Errors
+///
+/// Returns an error if the serializer fails.
 pub fn serialize_value<T, I, S>(
     value: &Value<T>,
     inner: &I,

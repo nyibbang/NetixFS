@@ -1,19 +1,65 @@
 use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
-use serde::de::Error;
 use std::{
     ffi::OsStr,
     os::unix::ffi::OsStrExt,
-    path::{Component, PathBuf},
+    path::{Component, Path, PathBuf},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct RelativePath(PathBuf);
 
 impl RelativePath {
+    /// Try to constructs a relative path from a path by sanitizing and normalizing it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `Error` if either the path:
+    ///   - has some null bytes,
+    ///   - has an ancestor component ('..'),
+    ///   - is absolute,
+    ///   - is empty after normalization (e.g. './').
+    pub fn from_path(path: &Path) -> Result<Self, Error> {
+        if path.as_os_str().as_bytes().contains(&0) {
+            return Err(Error::NullByte);
+        }
+        let mut normalized_sanitized = PathBuf::new();
+        for component in path.components() {
+            match component {
+                Component::Normal(name) => normalized_sanitized.push(name),
+                Component::CurDir => {}
+                Component::ParentDir => {
+                    return Err(Error::AncestorComponent);
+                }
+                Component::RootDir | Component::Prefix(_) => {
+                    return Err(Error::Absolute);
+                }
+            }
+        }
+        if normalized_sanitized.as_os_str().is_empty() {
+            return Err(Error::Empty);
+        }
+        Ok(Self(normalized_sanitized))
+    }
+
     #[must_use]
-    pub fn as_path(&self) -> &std::path::Path {
+    pub fn as_path(&self) -> &Path {
         &self.0
     }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("the path contains NUL bytes")]
+    NullByte,
+
+    #[error("the path contains an ancestor component")]
+    AncestorComponent,
+
+    #[error("the path is absolute")]
+    Absolute,
+
+    #[error("the path is empty")]
+    Empty,
 }
 
 impl<'de> serde::Deserialize<'de> for RelativePath {
@@ -21,6 +67,7 @@ impl<'de> serde::Deserialize<'de> for RelativePath {
     where
         D: serde::Deserializer<'de>,
     {
+        use serde::de::Error as DeserError;
         #[derive(serde::Deserialize)]
         struct RawOrBase64<'a> {
             #[serde(borrow)]
@@ -39,38 +86,15 @@ impl<'de> serde::Deserialize<'de> for RelativePath {
                         D::Error::custom(format!("could not decode path_b64 value: {decode_error}"))
                     })?
             }
-            (None, None) => return Err(D::Error::custom("neither path or path_b64 are present")),
+            (None, None) => return Err(DeserError::custom("neither path or path_b64 are present")),
             (Some(_), Some(_)) => {
-                return Err(D::Error::custom("both path and path_b64 are present"));
+                return Err(DeserError::custom("both path and path_b64 are present"));
             }
         };
-        let raw_path = std::path::Path::new(OsStr::from_bytes(&raw));
-        let path = normalize_sanitize(raw_path).map_err(D::Error::custom)?;
-        Ok(Self(path))
+        let raw_path = Path::new(OsStr::from_bytes(&raw));
+        let relative_path = Self::from_path(raw_path).map_err(D::Error::custom)?;
+        Ok(relative_path)
     }
-}
-
-fn normalize_sanitize(path: &std::path::Path) -> Result<PathBuf, String> {
-    if path.as_os_str().as_bytes().contains(&0) {
-        return Err("path must not contain NUL bytes".to_string());
-    }
-    let mut normalized_sanitized = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::Normal(name) => normalized_sanitized.push(name),
-            Component::CurDir => {}
-            Component::ParentDir => {
-                return Err("path must not contain ancestor components".to_string());
-            }
-            Component::RootDir | Component::Prefix(_) => {
-                return Err("path must be relative".to_string());
-            }
-        }
-    }
-    if normalized_sanitized.as_os_str().is_empty() {
-        return Err("path must not be empty".to_string());
-    }
-    Ok(normalized_sanitized)
 }
 
 #[cfg(test)]
@@ -95,7 +119,7 @@ mod tests {
     fn raw_path_that_is_absolute_is_rejected() {
         assert_matches!(
             deserialize(r#"{"path": "/etc/passwd"}"#),
-            Err(error) if error.to_string().contains("path must be relative")
+            Err(error) if error.to_string().contains("path is absolute")
         );
     }
 
@@ -103,7 +127,7 @@ mod tests {
     fn path_containing_ancestors_is_rejected() {
         assert_matches!(
             deserialize(r#"{"path": "foo/../bar"}"#),
-            Err(error) if error.to_string().contains("path must not contain ancestor components")
+            Err(error) if error.to_string().contains("path contains an ancestor component")
         );
     }
 
@@ -111,7 +135,7 @@ mod tests {
     fn empty_path_is_rejected() {
         assert_matches!(
             deserialize(r#"{"path": ""}"#),
-            Err(error) if error.to_string().contains("path must not be empty")
+            Err(error) if error.to_string().contains("path is empty")
         );
     }
 
@@ -179,7 +203,7 @@ mod tests {
     fn base64_path_that_is_absolute_is_rejected() {
         assert_matches!(
             deserialize(r#"{"path_b64": "L2V0Yy9wYXNzd2Q"}"#), // "/etc/passwd"
-            Err(error) if error.to_string().contains("path must be relative")
+            Err(error) if error.to_string().contains("path is absolute")
         );
     }
 
@@ -187,7 +211,7 @@ mod tests {
     fn base64_path_containing_ancestors_is_rejected() {
         assert_matches!(
             deserialize(r#"{"path_b64": "Zm9vLy4uL2Jhcg"}"#), // "foo/../bar"
-            Err(error) if error.to_string().contains("path must not contain ancestor components")
+            Err(error) if error.to_string().contains("path contains an ancestor component")
         );
     }
 
@@ -195,7 +219,7 @@ mod tests {
     fn empty_base64_path_is_rejected() {
         assert_matches!(
             deserialize(r#"{"path_b64": ""}"#), // ""
-            Err(error) if error.to_string().contains("path must not be empty")
+            Err(error) if error.to_string().contains("path is empty")
         );
     }
 
@@ -235,7 +259,7 @@ mod tests {
     fn path_reducing_to_nothing_is_rejected() {
         assert_matches!(
             deserialize(r#"{"path": "./"}"#),
-            Err(error) if error.to_string().contains("path must not be empty")
+            Err(error) if error.to_string().contains("path is empty")
         );
     }
 
@@ -243,7 +267,7 @@ mod tests {
     fn base64_path_containing_nul_is_rejected() {
         assert_matches!(
             deserialize(r#"{"path_b64": "YQBi"}"#), // "a\0b"
-            Err(error) if error.to_string().contains("path must not contain NUL bytes")
+            Err(error) if error.to_string().contains("path contains NUL bytes")
         );
     }
 }
