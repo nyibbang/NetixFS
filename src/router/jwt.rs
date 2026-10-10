@@ -150,7 +150,7 @@ pub(super) async fn validate(config: &Config, token: String) -> Result<String, E
 #[cfg(test)]
 mod tests {
     use super::{Error, validate};
-    use crate::config;
+    use crate::config::Config;
     use jsonwebtoken::{Algorithm, EncodingKey, Header};
     use serde_json::json;
     use std::{io::Write, path::Path};
@@ -203,9 +203,9 @@ mod tests {
         file
     }
 
-    fn config_pubkey(key_path: &Path) -> config::Config {
+    fn config_pubkey(key_path: &Path) -> Config {
         let path_str = key_path.to_str().expect("path is valid UTF-8");
-        config::load([
+        Config::load([
             "netixfs",
             "--allowed-root",
             "home=/tmp",
@@ -215,9 +215,9 @@ mod tests {
         .expect("config creation failed")
     }
 
-    fn config_jwks(jwks_path: &Path) -> config::Config {
+    fn config_jwks(jwks_path: &Path) -> Config {
         let path_str = jwks_path.to_str().expect("path is valid UTF-8");
-        config::load([
+        Config::load([
             "netixfs",
             "--allowed-root",
             "home=/tmp",
@@ -319,7 +319,7 @@ mod tests {
             .path()
             .to_str()
             .expect("key file path is valid UTF-8");
-        let config = config::load([
+        let config = Config::load([
             "netixfs",
             "--allowed-root",
             "home=/tmp",
@@ -344,7 +344,7 @@ mod tests {
             .path()
             .to_str()
             .expect("key file path is valid UTF-8");
-        let config = config::load([
+        let config = Config::load([
             "netixfs",
             "--allowed-root",
             "home=/tmp",
@@ -370,7 +370,7 @@ mod tests {
             .path()
             .to_str()
             .expect("key file path is valid UTF-8");
-        let config = config::load([
+        let config = Config::load([
             "netixfs",
             "--allowed-root",
             "home=/tmp",

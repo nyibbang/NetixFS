@@ -25,7 +25,6 @@ tokio = { version = "1.52.3", features = [
   "net",
   "rt",
   "rt-multi-thread",
-  "tokio-macros",
   "fs",
 ] }
 tokio-util = "0.7.18"

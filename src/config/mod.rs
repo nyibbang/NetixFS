@@ -34,45 +34,6 @@ use url::Url;
 
 mod parameters;
 
-/// Load configuration from (optional) TOML file, environment variables,
-/// and CLI flags, merge them in precedence order (file < env < CLI), and
-/// resolve into a fully-typed `Config`.
-///
-/// # Errors
-///
-/// Returns an error if the config file cannot be read or parsed, or if the
-/// resolved values fail validation.
-pub fn load<I>(args: I) -> Result<Config>
-where
-    I: IntoIterator,
-    I::Item: Into<OsString> + Clone,
-{
-    let arguments = command!()
-        .args(parameters::arguments())
-        .groups(parameters::argument_groups())
-        .get_matches_from(args);
-    let config_file = parameters::CONFIG_FILE.resolve(&arguments, None)?;
-    let file_config = config_file
-        .value
-        .as_ref()
-        .map(|config_file_path| -> Result<toml::Table> {
-            let content = std::fs::read_to_string(config_file_path).wrap_err_with(|| {
-                format!("failed to read config file {}", config_file_path.display())
-            })?;
-            toml::from_str::<toml::Table>(&content).wrap_err_with(|| {
-                format!("failed to parse config file {}", config_file_path.display())
-            })
-        })
-        .transpose()?;
-    Config::resolve(
-        config_file,
-        Resolver {
-            arguments: &arguments,
-            file_config: file_config.as_ref(),
-        },
-    )
-}
-
 // ── Config structs ───────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize)]
@@ -91,6 +52,47 @@ pub struct Config {
     pub logging: LoggingConfig,
     pub metrics: MetricsConfig,
     pub diagnostics: DiagnosticsConfig,
+}
+
+impl Config {
+    /// Load configuration from (optional) TOML file, environment variables,
+    /// and CLI flags, merge them in precedence order (file < env < CLI), and
+    /// resolve into a fully-typed `Config`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the config file cannot be read or parsed, or if the
+    /// resolved values fail validation.
+    pub fn load<I>(args: I) -> Result<Self>
+    where
+        I: IntoIterator,
+        I::Item: Into<OsString> + Clone,
+    {
+        let arguments = command!()
+            .args(parameters::arguments())
+            .groups(parameters::argument_groups())
+            .get_matches_from(args);
+        let config_file = parameters::CONFIG_FILE.resolve(&arguments, None)?;
+        let file_config = config_file
+            .value
+            .as_ref()
+            .map(|config_file_path| -> Result<toml::Table> {
+                let content = std::fs::read_to_string(config_file_path).wrap_err_with(|| {
+                    format!("failed to read config file {}", config_file_path.display())
+                })?;
+                toml::from_str::<toml::Table>(&content).wrap_err_with(|| {
+                    format!("failed to parse config file {}", config_file_path.display())
+                })
+            })
+            .transpose()?;
+        Self::resolve(
+            config_file,
+            Resolver {
+                arguments: &arguments,
+                file_config: file_config.as_ref(),
+            },
+        )
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
