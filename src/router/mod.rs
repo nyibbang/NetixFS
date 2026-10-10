@@ -9,7 +9,7 @@ use axum::{
 use bytes::Bytes;
 use eyre::Result;
 use serde_json::{Value, json};
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use std::{net::SocketAddr, os::unix::net::UnixStream, sync::Arc, time::Duration};
 use tokio::net::TcpListener;
 use tower::ServiceBuilder;
 use tower_http::{
@@ -29,7 +29,7 @@ mod jwt;
 mod ready;
 mod user;
 
-pub(crate) fn start(config: Arc<Config>) -> eyre::Result<()> {
+pub(crate) fn run(config: Arc<Config>, supervisor_socket: UnixStream) -> eyre::Result<()> {
     let runtime = tokio::runtime::Runtime::new()?;
     runtime.block_on(async {
         // Start services
