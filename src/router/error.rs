@@ -1,13 +1,15 @@
-use crate::service::RequestId;
 use axum::{
     Json,
     http::StatusCode,
     response::{IntoResponse, Response},
 };
 use serde::{Serialize, Serializer};
+use serde_with::serde_as;
+use tower_http::request_id::RequestId;
 
+#[serde_as]
 #[derive(Debug, Clone, Serialize)]
-pub(crate) struct Error {
+pub struct ErrorResponse {
     // Machine-readable error code
     pub(crate) code: String,
 
@@ -31,10 +33,11 @@ pub(crate) struct Error {
     pub(crate) retryable: bool,
 
     /// Machine-readable error code
+    #[serde_as(as = "Option<RequestIdStrOrBytes>")]
     pub(crate) request_id: Option<RequestId>,
 }
 
-impl Error {
+impl ErrorResponse {
     pub(crate) fn missing_request_id(operation: String, path: Option<String>) -> Self {
         Self {
             code: "missing_request_id".to_owned(),
@@ -49,15 +52,34 @@ impl Error {
     }
 }
 
-impl IntoResponse for Error {
+impl IntoResponse for ErrorResponse {
     fn into_response(self) -> Response {
         (self.status, Json(self)).into_response()
     }
 }
 
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde serialize_with requires a reference"
+)]
 fn serialize_status_code<S>(code: &StatusCode, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: Serializer,
 {
     code.as_u16().serialize(serializer)
+}
+
+struct RequestIdStrOrBytes;
+
+impl serde_with::SerializeAs<RequestId> for RequestIdStrOrBytes {
+    fn serialize_as<S>(request_id: &RequestId, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let value = request_id.header_value();
+        match value.to_str() {
+            Ok(id) => id.serialize(serializer),
+            Err(_) => value.as_bytes().serialize(serializer),
+        }
+    }
 }

@@ -26,9 +26,9 @@ pub(super) struct Checks {
 }
 
 impl Checks {
-    fn has_failures(&self) -> bool {
+    fn has_failures(self) -> bool {
         [self.configuration, self.jwt_keys, self.pool]
-            .iter()
+            .into_iter()
             .any(Check::is_failure)
     }
 }
@@ -59,7 +59,7 @@ pub(super) enum Check {
 }
 
 impl Check {
-    fn is_failure(&self) -> bool {
+    const fn is_failure(self) -> bool {
         matches!(self, Self::Unavailable)
     }
 }

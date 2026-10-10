@@ -5,23 +5,22 @@ edition = "2024"
 
 [dependencies]
 axum = "0.8.9"
+base64 = "0.23.1"
 bon = "3.9.1"
 bytes = "1.11.1"
 bytesize = { version = "2.3.1", features = ["serde"] }
 clap = { version = "4.6.1", features = ["cargo", "derive", "env"] }
-either = "1.16.0"
 eyre = "0.6.12"
 futures = "0.3.32"
 humantime = "2.3.0"
 humantime-serde = "1.1.1"
-jsonwebtoken = { version = "10.4.0", features = ["rust_crypto"] }
-lazy_static = "1.5.0"
+jsonwebtoken = { version = "11.0.0", features = ["rust_crypto"] }
 reqwest = "0.13.4"
+rustix = { version = "1.1.4", features = ["fs"] }
 serde = { version = "1.0.228", features = ["derive", "rc"] }
 serde_json = "1.0.145"
-serde_with = "3.21.0"
+serde_with = "3.22.0"
 simple-eyre = "0.3.1"
-tempfile = "3.27.0"
 tokio = { version = "1.52.3", features = [
   "net",
   "rt",
@@ -33,7 +32,22 @@ tokio-util = "0.7.18"
 toml = "1.1.2"
 uzers = "0.12"
 tower = "0.5.3"
-tower-http = { version = "0.6.11", features = ["auth", "compression-br", "cors", "decompression-br", "limit", "normalize-path", "on-early-drop", "request-id", "sensitive-headers", "set-header", "timeout", "trace", "tracing", "util"] }
+tower-http = { version = "0.7.0", features = [
+  "auth",
+  "compression-br",
+  "cors",
+  "decompression-br",
+  "limit",
+  "normalize-path",
+  "on-early-drop",
+  "request-id",
+  "sensitive-headers",
+  "set-header",
+  "timeout",
+  "trace",
+  "tracing",
+  "util",
+] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["json"] }
 url = { version = "2.5.8", features = ["serde"] }
@@ -41,3 +55,21 @@ thiserror = "2.0.20"
 
 [dev-dependencies]
 assert_matches = "1.5.0"
+tempfile = "3.27.0"
+
+[lints.clippy]
+pedantic = { level = "deny", priority = -1 }
+nursery = { level = "deny", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+indexing_slicing = "deny"
+arithmetic_side_effects = "deny"
+unreachable = "deny"
+unimplemented = "deny"
+unchecked_time_subtraction = "deny"
+todo = "deny"
+string_slice = "deny"
+panic_in_result_fn = "deny"
+panic = "deny"
+exit = "deny"
+as_conversions = "deny"

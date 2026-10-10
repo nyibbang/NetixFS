@@ -3,7 +3,7 @@ use uzers::get_user_by_name;
 
 /// An authenticated and identity-resolved user, attached to each request as an Axum extension.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct User {
+pub struct User {
     pub(super) name: String,
     pub(super) identity: Identity,
 }
@@ -21,9 +21,8 @@ pub(super) async fn resolve(name: String) -> Result<Identity, ResolveError> {
     // Dispatch the calls into a blocking task because NSS functions (`getpwnam_r`, `getgrouplist`)
     // are synchronous C library calls that must not run on the Tokio executor.
     tokio::task::spawn_blocking(move || {
-        let user = match get_user_by_name(&name) {
-            Some(user) => user,
-            None => return Err(ResolveError::UserNotFound(name)),
+        let Some(user) = get_user_by_name(&name) else {
+            return Err(ResolveError::UserNotFound(name));
         };
         let uid = user.uid();
         let primary_gid = user.primary_group_id();

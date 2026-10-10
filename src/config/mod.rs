@@ -1,6 +1,6 @@
 //! Configuration system: TOML file < env vars < CLI args.
 //!
-//! Every knob has three possible sources. Precedence (lowest → cli_envest):
+//! Every knob has three possible sources. Precedence (lowest → highest):
 //!   1. TOML file  (pointed to by `--config-file` / `NETIXFS_CONFIG_FILE`)
 //!   2. Environment variables
 //!   3. CLI flags
@@ -37,7 +37,12 @@ mod parameters;
 /// Load configuration from (optional) TOML file, environment variables,
 /// and CLI flags, merge them in precedence order (file < env < CLI), and
 /// resolve into a fully-typed `Config`.
-pub(crate) fn load<I>(args: I) -> Result<Config>
+///
+/// # Errors
+///
+/// Returns an error if the config file cannot be read or parsed, or if the
+/// resolved values fail validation.
+pub fn load<I>(args: I) -> Result<Config>
 where
     I: IntoIterator,
     I::Item: Into<OsString> + Clone,
@@ -51,10 +56,12 @@ where
         .value
         .as_ref()
         .map(|config_file_path| -> Result<toml::Table> {
-            let content = std::fs::read_to_string(config_file_path)
-                .wrap_err_with(|| format!("failed to read config file {:?}", config_file_path))?;
-            toml::from_str::<toml::Table>(&content)
-                .wrap_err_with(|| format!("failed to parse config file {:?}", config_file_path))
+            let content = std::fs::read_to_string(config_file_path).wrap_err_with(|| {
+                format!("failed to read config file {}", config_file_path.display())
+            })?;
+            toml::from_str::<toml::Table>(&content).wrap_err_with(|| {
+                format!("failed to parse config file {}", config_file_path.display())
+            })
         })
         .transpose()?;
     Config::resolve(
@@ -69,8 +76,9 @@ where
 // ── Config structs ───────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize)]
-pub(crate) struct Config {
-    pub config_file: Value<Option<PathBuf>>,
+pub struct Config {
+    #[serde(rename = "config_file")]
+    pub file: Value<Option<PathBuf>>,
     pub server: ServerConfig,
     pub tls: TlsConfig,
     pub cors: CorsConfig,
@@ -86,14 +94,14 @@ pub(crate) struct Config {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub(crate) struct ServerConfig {
+pub struct ServerConfig {
     pub bind_address: Value<IpAddr>,
     pub port: Value<u16>,
     pub public_base_url: Value<Option<Url>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub(crate) struct TlsConfig {
+pub struct TlsConfig {
     pub enabled: Value<bool>,
     pub cert_path: Value<Option<PathBuf>>,
     pub key_path: Value<Option<PathBuf>>,
@@ -124,7 +132,7 @@ impl TlsConfig {
                 );
             }
         }
-        Ok(TlsConfig {
+        Ok(Self {
             enabled,
             cert_path,
             key_path,
@@ -134,7 +142,7 @@ impl TlsConfig {
 
 #[serde_as]
 #[derive(Debug, Clone, Serialize)]
-pub(crate) struct CorsConfig {
+pub struct CorsConfig {
     pub enabled: Value<bool>,
     pub allowed_origins: Value<Vec<String>>,
     #[serde_as(as = "Value<Vec<SerdeMethod>>")]
@@ -188,12 +196,12 @@ impl SerializeAs<Method> for SerdeMethod {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub(crate) struct AuthConfig {
+pub struct AuthConfig {
     pub jwt: JwtConfig,
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub(crate) struct JwtConfig {
+pub struct JwtConfig {
     #[serde(flatten)]
     pub source: JwtSource,
     pub issuer: Value<Option<String>>,
@@ -223,7 +231,7 @@ impl JwtConfig {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum JwtSource {
+pub enum JwtSource {
     PublicKeyPath(Value<PathBuf>),
     PublicKeyUrl(Value<Url>),
     JwksPath(Value<PathBuf>),
@@ -246,21 +254,21 @@ impl JwtSource {
         }
 
         impl Candidate {
-            fn value_source(self) -> ValueSource {
+            const fn value_source(self) -> ValueSource {
                 match self {
-                    Self::PublicKeyPath(_, value_source) => value_source,
-                    Self::PublicKeyUrl(_, value_source) => value_source,
-                    Self::JwksPath(_, value_source) => value_source,
-                    Self::JwksUrl(_, value_source) => value_source,
+                    Self::PublicKeyPath(_, value_source)
+                    | Self::PublicKeyUrl(_, value_source)
+                    | Self::JwksPath(_, value_source)
+                    | Self::JwksUrl(_, value_source) => value_source,
                 }
             }
 
-            fn id(self) -> &'static str {
+            const fn id(self) -> &'static str {
                 match self {
-                    Self::PublicKeyPath(id, _) => id,
-                    Self::PublicKeyUrl(id, _) => id,
-                    Self::JwksPath(id, _) => id,
-                    Self::JwksUrl(id, _) => id,
+                    Self::PublicKeyPath(id, _)
+                    | Self::PublicKeyUrl(id, _)
+                    | Self::JwksPath(id, _)
+                    | Self::JwksUrl(id, _) => id,
                 }
             }
         }
@@ -310,12 +318,14 @@ impl JwtSource {
                         };
                         return Ok(source);
                     }
-                    Some(other) => bail!(
-                        "only one JWT source must be specified (found {:?} and {:?} in {})",
-                        candidate.id(),
-                        other.id(),
-                        value_source.in_description()
-                    ),
+                    Some(other) => {
+                        return Err(eyre!(
+                            "only one JWT source must be specified (found {:?} and {:?} in {})",
+                            candidate.id(),
+                            other.id(),
+                            value_source.in_description()
+                        ));
+                    }
                 }
             }
         }
@@ -327,7 +337,7 @@ impl JwtSource {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub(crate) struct FilesystemConfig {
+pub struct FilesystemConfig {
     pub allowed_roots: Value<Vec<Root>>,
     pub read_only: Value<bool>,
     pub default_file_mode: Value<FileMode>,
@@ -362,64 +372,74 @@ impl FilesystemConfig {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub(crate) struct OperationsConfig {
-    pub allow_recursive_delete: Value<bool>,
-    pub allow_recursive_copy: Value<bool>,
-    pub allow_chmod: Value<bool>,
-    pub allow_hard_links: Value<bool>,
-    pub allow_symlink_create: Value<bool>,
+pub struct OperationsConfig {
+    #[serde(rename = "allow_recursive_delete")]
+    pub recursive_delete: Value<bool>,
+    #[serde(rename = "allow_recursive_copy")]
+    pub recursive_copy: Value<bool>,
+    #[serde(rename = "allow_chmod")]
+    pub chmod: Value<bool>,
+    #[serde(rename = "allow_hard_links")]
+    pub hard_links: Value<bool>,
+    #[serde(rename = "allow_symlink_create")]
+    pub symlink_create: Value<bool>,
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub(crate) struct LimitsConfig {
-    pub max_request_body_size: Value<ByteSize>,
-    pub max_read_size: Value<ByteSize>,
-    pub max_directory_entries: Value<u32>,
-    pub max_concurrent_requests: Value<u32>,
-    pub max_concurrent_streams: Value<u32>,
+pub struct LimitsConfig {
+    #[serde(rename = "max_request_body_size")]
+    pub request_body_size: Value<ByteSize>,
+    #[serde(rename = "max_read_size")]
+    pub read_size: Value<ByteSize>,
+    #[serde(rename = "max_directory_entries")]
+    pub directory_entries: Value<u32>,
+    #[serde(rename = "max_concurrent_requests")]
+    pub concurrent_requests: Value<u32>,
+    #[serde(rename = "max_concurrent_streams")]
+    pub concurrent_streams: Value<u32>,
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub(crate) struct StreamingConfig {
+pub struct StreamingConfig {
     pub idle_timeout: Value<Duration>,
     pub max_duration: Value<Duration>,
     pub heartbeat_interval: Value<Duration>,
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub(crate) struct PoolConfig {
+pub struct PoolConfig {
     pub max_workers: Value<u32>,
     pub idle_timeout: Value<Duration>,
     pub request_timeout: Value<Duration>,
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub(crate) struct LoggingConfig {
+pub struct LoggingConfig {
     pub level: Value<LogLevel>,
     pub format: Value<LogFormat>,
     pub redact_paths: Value<bool>,
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub(crate) struct MetricsConfig {
+pub struct MetricsConfig {
     pub enabled: Value<bool>,
     pub bind_address: Value<IpAddr>,
     pub port: Value<u16>,
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub(crate) struct ConfigEndpointConfig {
+pub struct ConfigEndpointConfig {
     pub enabled: Value<bool>,
     pub bind_address: Value<SocketAddr>,
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub(crate) struct DiagnosticsConfig {
+pub struct DiagnosticsConfig {
     pub config_endpoint: ConfigEndpointConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, DeserializeFromStr, Serialize)]
-pub(crate) struct Root {
+pub struct Root {
     pub id: String,
     pub path: PathBuf,
 }
@@ -430,7 +450,7 @@ impl FromStr for Root {
     /// Parse a filesystem root entry in `"id=path"` format.
     ///
     /// Both the `id` and `path` portions must be non-empty.
-    fn from_str(s: &str) -> Result<Root> {
+    fn from_str(s: &str) -> Result<Self> {
         let (id, path) = s
             .split_once('=')
             .ok_or_else(|| eyre!("invalid root {:?}: expected \"id=path\" format", s))?;
@@ -442,7 +462,7 @@ impl FromStr for Root {
         if path.is_empty() {
             bail!("root path must not be empty in {:?}", s);
         }
-        Ok(Root {
+        Ok(Self {
             id,
             path: PathBuf::from(path),
         })
@@ -466,12 +486,13 @@ pub struct FileMode(u32);
 
 impl From<FileMode> for Permissions {
     fn from(mode: FileMode) -> Self {
-        Permissions::from_mode(mode.0)
+        Self::from_mode(mode.0)
     }
 }
 
 impl FileMode {
-    pub fn value(self) -> u32 {
+    #[must_use]
+    pub const fn value(self) -> u32 {
         self.0
     }
 }
@@ -490,7 +511,7 @@ impl FromStr for FileMode {
         let digits = s.strip_prefix("0o").unwrap_or(s);
         u32::from_str_radix(digits, 8)
             .map(Self)
-            .wrap_err_with(|| format!("invalid Unix mode {:?}: expected octal e.g. \"0644\"", s))
+            .wrap_err_with(|| format!("invalid Unix mode {s:?}: expected octal e.g. \"0644\""))
     }
 }
 
@@ -503,7 +524,7 @@ impl Display for FileMode {
 /// Log verbosity level.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, ValueEnum)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum LogLevel {
+pub enum LogLevel {
     Error,
     Warn,
     Info,
@@ -514,11 +535,11 @@ pub(crate) enum LogLevel {
 impl From<LogLevel> for tracing::Level {
     fn from(l: LogLevel) -> Self {
         match l {
-            LogLevel::Error => tracing::Level::ERROR,
-            LogLevel::Warn => tracing::Level::WARN,
-            LogLevel::Info => tracing::Level::INFO,
-            LogLevel::Debug => tracing::Level::DEBUG,
-            LogLevel::Trace => tracing::Level::TRACE,
+            LogLevel::Error => Self::ERROR,
+            LogLevel::Warn => Self::WARN,
+            LogLevel::Info => Self::INFO,
+            LogLevel::Debug => Self::DEBUG,
+            LogLevel::Trace => Self::TRACE,
         }
     }
 }
@@ -534,7 +555,7 @@ impl From<LogLevel> for tracing::level_filters::LevelFilter {
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize, ValueEnum,
 )]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum LogFormat {
+pub enum LogFormat {
     Json,
     Pretty,
     Compact,
@@ -545,13 +566,13 @@ pub(crate) enum LogFormat {
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize, ValueEnum,
 )]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum SymlinkPolicy {
+pub enum SymlinkPolicy {
     Reject,
     FollowSafe,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct Value<T> {
+pub struct Value<T> {
     pub value: T,
     pub source: ValueSource,
     pub id: &'static str,
@@ -607,7 +628,10 @@ impl<T> Value<Option<T>> {
     }
 }
 
-pub(super) fn serialize_value<T, I, S>(
+/// # Errors
+///
+/// Returns an error if the serializer fails.
+pub fn serialize_value<T, I, S>(
     value: &Value<T>,
     inner: &I,
     serializer: S,
@@ -666,7 +690,7 @@ where
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum ValueSource {
+pub enum ValueSource {
     Default,
     ConfigFile,
     Environment,
@@ -674,12 +698,12 @@ pub(crate) enum ValueSource {
 }
 
 impl ValueSource {
-    fn in_description(self) -> &'static str {
+    const fn in_description(self) -> &'static str {
         match self {
-            ValueSource::ConfigFile => "configuration file",
-            ValueSource::Environment => "environment",
-            ValueSource::Argument => "command line arguments",
-            ValueSource::Default => "default",
+            Self::ConfigFile => "configuration file",
+            Self::Environment => "environment",
+            Self::Argument => "command line arguments",
+            Self::Default => "default",
         }
     }
 }
@@ -699,7 +723,7 @@ impl Config {
     /// Get either from CLI, environment or configuration file, apply defaults, validate constraints, and produce a fully-typed `Config`.
     fn resolve(config_file: Value<Option<PathBuf>>, resolver: Resolver<'_>) -> Result<Self> {
         Ok(Self {
-            config_file,
+            file: config_file,
             server: ServerConfig {
                 bind_address: resolver.resolve(&parameters::SERVER_BIND_ADDRESS)?,
                 port: resolver.resolve(&parameters::SERVER_PORT)?,
@@ -712,25 +736,20 @@ impl Config {
             },
             filesystem: FilesystemConfig::resolve(resolver)?,
             operations: OperationsConfig {
-                allow_recursive_delete: resolver
+                recursive_delete: resolver
                     .resolve(&parameters::OPERATIONS_ALLOW_RECURSIVE_DELETE)?,
-                allow_recursive_copy: resolver
-                    .resolve(&parameters::OPERATIONS_ALLOW_RECURSIVE_COPY)?,
-                allow_chmod: resolver.resolve(&parameters::OPERATIONS_ALLOW_CHMOD)?,
-                allow_hard_links: resolver.resolve(&parameters::OPERATIONS_ALLOW_HARD_LINKS)?,
-                allow_symlink_create: resolver
-                    .resolve(&parameters::OPERATIONS_ALLOW_SYMLINK_CREATE)?,
+                recursive_copy: resolver.resolve(&parameters::OPERATIONS_ALLOW_RECURSIVE_COPY)?,
+                chmod: resolver.resolve(&parameters::OPERATIONS_ALLOW_CHMOD)?,
+                hard_links: resolver.resolve(&parameters::OPERATIONS_ALLOW_HARD_LINKS)?,
+                symlink_create: resolver.resolve(&parameters::OPERATIONS_ALLOW_SYMLINK_CREATE)?,
             },
             limits: LimitsConfig {
-                max_request_body_size: resolver
-                    .resolve(&parameters::LIMITS_MAX_REQUEST_BODY_SIZE)?,
-                max_read_size: resolver.resolve(&parameters::LIMITS_MAX_READ_SIZE)?,
-                max_directory_entries: resolver
-                    .resolve(&parameters::LIMITS_MAX_DIRECTORY_ENTRIES)?,
-                max_concurrent_requests: resolver
+                request_body_size: resolver.resolve(&parameters::LIMITS_MAX_REQUEST_BODY_SIZE)?,
+                read_size: resolver.resolve(&parameters::LIMITS_MAX_READ_SIZE)?,
+                directory_entries: resolver.resolve(&parameters::LIMITS_MAX_DIRECTORY_ENTRIES)?,
+                concurrent_requests: resolver
                     .resolve(&parameters::LIMITS_MAX_CONCURRENT_REQUESTS)?,
-                max_concurrent_streams: resolver
-                    .resolve(&parameters::LIMITS_MAX_CONCURRENT_STREAMS)?,
+                concurrent_streams: resolver.resolve(&parameters::LIMITS_MAX_CONCURRENT_STREAMS)?,
             },
             streaming: StreamingConfig {
                 idle_timeout: resolver
@@ -776,12 +795,12 @@ impl Config {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(super) struct Resolver<'a> {
+pub struct Resolver<'a> {
     arguments: &'a ArgMatches,
     file_config: Option<&'a toml::Table>,
 }
 
-impl<'a> Resolver<'a> {
+impl Resolver<'_> {
     fn resolve<T>(&self, parameter: &Parameter<T>) -> Result<Value<T::Output>>
     where
         T: parameters::ValueSeed,
@@ -790,8 +809,8 @@ impl<'a> Resolver<'a> {
     }
 }
 
-pub(crate) fn service(config: Arc<Config>) -> Router {
-    Router::new().route("/configz", get(Json(Arc::clone(&config))))
+pub fn service(config: Arc<Config>) -> Router {
+    Router::new().route("/configz", get(Json(config)))
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────
@@ -911,10 +930,10 @@ mod tests {
     #[test]
     fn file_mode_display_uses_octal_without_leading_zero() {
         let mode = FileMode(0o644);
-        assert_eq!(format!("{}", mode), "644");
+        assert_eq!(format!("{mode}"), "644");
 
         let mode = FileMode(0o755);
-        assert_eq!(format!("{}", mode), "755");
+        assert_eq!(format!("{mode}"), "755");
     }
 
     // ── LogLevel ────────────────────────────────────────────────────────────
@@ -1518,7 +1537,7 @@ mod tests {
                     }
                 );
             }
-        )
+        );
     }
 
     #[test]

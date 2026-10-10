@@ -1,16 +1,9 @@
 use axum::serve::serve;
-pub(crate) use config::Config;
 use eyre::Result;
-use service::{meta_services, service};
-use std::{net::SocketAddr, pin::Pin, sync::Arc};
+use netixfs::{Config, config, logging, router};
+use std::{net::SocketAddr, sync::Arc};
 use tokio::{net::TcpListener, spawn};
 use tracing::debug;
-
-mod config;
-mod logging;
-mod service;
-
-type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send + 'static>>;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -40,6 +33,10 @@ async fn serve_main(config: Arc<Config>) -> Result<()> {
     let address = SocketAddr::new(config.server.bind_address.value, config.server.port.value);
     let listener = TcpListener::bind(address).await?;
     debug!(%address, "exposing service endpoint");
-    serve(listener, service(config).merge(meta_services())).await?;
+    serve(
+        listener,
+        router::service(config).merge(router::meta_services()),
+    )
+    .await?;
     Ok(())
 }
