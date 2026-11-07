@@ -2,15 +2,28 @@ pub use self::{error::ErrorResponse, user::User};
 use crate::config::{self, Config};
 use auth::Authenticator;
 use axum::{
-    Json, Router,
+    Json,
     http::{HeaderValue, header},
     routing::get,
 };
 use bytes::Bytes;
 use eyre::Result;
+use fork::ProcessId;
 use serde_json::{Value, json};
-use std::{net::SocketAddr, os::unix::net::UnixStream, sync::Arc, time::Duration};
-use tokio::net::TcpListener;
+use std::{
+    io,
+    net::SocketAddr,
+    os::unix::net::UnixStream,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::Duration,
+};
+use tokio::{
+    net::TcpListener,
+    runtime::{self, Runtime},
+};
 use tower::ServiceBuilder;
 use tower_http::{
     ServiceBuilderExt,
@@ -29,16 +42,46 @@ mod jwt;
 mod ready;
 mod user;
 
-pub(crate) fn run(config: Arc<Config>, supervisor_socket: UnixStream) -> eyre::Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
-    runtime.block_on(async {
-        // Start services
-        if config.diagnostics.config_endpoint.enabled.value {
-            tokio::spawn(serve_diagnostics(Arc::clone(&config)));
-        }
-        serve(config).await?;
-        Ok(())
-    })
+pub(crate) struct Router {
+    config: Arc<Config>,
+    supervisor_process_id: ProcessId,
+    supervisor_socket: UnixStream,
+    runtime: Runtime,
+}
+
+impl Router {
+    pub(crate) fn new(
+        config: Arc<Config>,
+        supervisor_process_id: ProcessId,
+        supervisor_socket: UnixStream,
+    ) -> io::Result<Self> {
+        let runtime = runtime::Builder::new_multi_thread()
+            .enable_all()
+            .name("router")
+            .thread_name_fn(|| {
+                static THREAD_ID: AtomicUsize = AtomicUsize::new(0);
+                let id = THREAD_ID.fetch_add(1, Ordering::SeqCst);
+                format!("{}-router-{}", env!("CARGO_PKG_NAME"), id)
+            })
+            .build()?;
+        Ok(Self {
+            config,
+            supervisor_process_id,
+            supervisor_socket,
+            runtime,
+        })
+    }
+
+    pub(crate) fn run(&self) -> eyre::Result<()> {
+        self.runtime.block_on(async {
+            if self.config.diagnostics.config_endpoint.enabled.value {
+                self.runtime
+                    .spawn(serve_diagnostics(Arc::clone(&self.config)));
+            }
+            serve(Arc::clone(&self.config)).await?;
+            Ok(())
+        })
+    }
 }
 
 async fn serve_diagnostics(config: Arc<Config>) -> Result<()> {
@@ -53,7 +96,11 @@ async fn serve(config: Arc<Config>) -> Result<()> {
     let address = SocketAddr::new(config.server.bind_address.value, config.server.port.value);
     let listener = TcpListener::bind(address).await?;
     debug!(%address, "exposing service endpoint");
-    axum::serve(listener, service(config).merge(meta_services())).await?;
+    axum::serve(
+        listener,
+        service(Arc::clone(&config)).merge(meta_services()),
+    )
+    .await?;
     Ok(())
 }
 
@@ -61,7 +108,7 @@ async fn health() -> Json<Value> {
     Json(json!({ "status": "ok" }))
 }
 
-pub(crate) fn service(config: Arc<Config>) -> Router {
+pub(crate) fn service(config: Arc<Config>) -> axum::Router {
     let generic_middleware = ServiceBuilder::new()
         // Mark the `Authorization` and `Cookie` headers as sensitive so it doesn't show in logs
         .sensitive_headers([header::AUTHORIZATION, header::COOKIE])
@@ -101,14 +148,14 @@ pub(crate) fn service(config: Arc<Config>) -> Router {
             HeaderValue::from_static("application/octet-stream"),
         );
 
-    Router::new()
+    axum::Router::new()
         .nest("/api/v1", endpoints::service())
         .layer(generic_middleware)
         .route_layer(middleware)
 }
 
-pub(crate) fn meta_services() -> Router {
-    Router::new()
+pub(crate) fn meta_services() -> axum::Router {
+    axum::Router::new()
         .route("/healthz", get(health))
         .route("/readyz", get(ready::run_checks))
 }

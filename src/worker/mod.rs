@@ -1,6 +1,25 @@
+use std::os::unix::net::UnixStream;
+
 use crate::config::SymlinkPolicy;
 
 pub mod root;
+
+#[derive(Debug)]
+pub struct Worker {
+    config: Config,
+    socket: UnixStream,
+}
+
+impl Worker {
+    #[must_use]
+    pub const fn new(config: Config, socket: UnixStream) -> Self {
+        Self { config, socket }
+    }
+
+    pub fn run(&self) -> eyre::Result<()> {
+        todo!()
+    }
+}
 
 #[derive(Debug)]
 pub struct Config {
